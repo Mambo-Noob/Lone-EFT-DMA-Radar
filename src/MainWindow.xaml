@@ -35,6 +35,15 @@
             <TabItem Header="Loot Filters">
                 <tabs:LootFiltersTab x:Name="LootFilters"/>
             </TabItem>
+            <TabItem Header="ESP">
+                <tabs:EspTab x:Name="Esp" />
+            </TabItem>    
+            <TabItem Header="MakcuAimbot">
+                <tabs:MakcuTab x:Name="Makcu" />
+            </TabItem>
+            <TabItem Header="MemWrites" Foreground="Red">
+                <tabs:MemWritesTab x:Name="MemWrites" />
+            </TabItem>
         </TabControl>
     </Grid>
 </Window>

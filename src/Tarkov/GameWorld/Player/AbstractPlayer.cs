@@ -30,6 +30,7 @@ using Collections.Pooled;
 using LoneEftDmaRadar.DMA;
 using LoneEftDmaRadar.Misc;
 using LoneEftDmaRadar.Tarkov.GameWorld.Loot;
+using LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers;
 using LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers;
 using LoneEftDmaRadar.Tarkov.Unity;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
@@ -212,6 +213,11 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         public UnityTransform SkeletonRoot { get; protected set; }
 
         /// <summary>
+        /// Player's Skeleton Bones (for ESP).
+        /// </summary>
+        public virtual Skeleton Skeleton { get; protected set; }
+
+        /// <summary>
         /// TRUE if critical memory reads (position/rotation) have failed.
         /// </summary>
         public bool IsError { get; set; }
@@ -224,7 +230,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         /// <summary>
         /// Dead Player's associated loot container object.
         /// </summary>
-        public LootCorpse LootObject { get; set; }
+        public LootContainer LootObject { get; set; }
         /// <summary>
         /// Alerts for this Player Object.
         /// Used by Player History UI Interop.
@@ -275,6 +281,24 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         /// </summary>
         public virtual ulong RotationAddress { get; }
 
+        /// <summary>
+        /// EFT.PlayerBody
+        /// </summary>
+        public virtual ulong Body { get; }
+
+        /// <summary>
+        /// Inventory Controller field address.
+        /// </summary>
+        public virtual ulong InventoryControllerAddr { get; }
+
+        /// <summary>
+        /// Hands Controller field address.
+        /// </summary>
+        public virtual ulong HandsControllerAddr { get; }
+        /// <summary>
+        /// Fallback position vector for when SkeletonRoot is null.
+        /// </summary>
+        private static readonly Vector3 _fallbackPosition = new Vector3(0, 0, 0);
         #endregion
 
         #region Boolean Getters
@@ -465,46 +489,80 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         /// Executed on each Realtime Loop.
         /// </summary>
         /// <param name="index">Scatter read index dedicated to this player.</param>
-        public virtual void OnRealtimeLoop(VmmScatter scatter)
+internal DateTime NextSkeletonRetryUtc = DateTime.MinValue;
+public virtual void OnRealtimeLoop(VmmScatter scatter)
+{
+    // ✅ Early validation
+    if (SkeletonRoot == null)
+    {
+        Debug.WriteLine($"WARNING: SkeletonRoot is null for player '{Name}'");
+        IsError = true;
+        return;
+    }
+
+    // Read enough vertices to cover all bones in the skeleton
+    int vertexCount = Skeleton != null ? Skeleton.MaxBoneIndex + 1 : SkeletonRoot.Count;
+
+    // ✅ Validate vertex count
+    if (vertexCount <= 0 || vertexCount > 10000)
+    {
+        Debug.WriteLine($"WARNING: Invalid vertex count {vertexCount} for player '{Name}'");
+        IsError = true;
+        return;
+    }
+
+    scatter.PrepareReadValue<Vector2>(RotationAddress);
+    scatter.PrepareReadArray<TrsX>(SkeletonRoot.VerticesAddr, vertexCount);
+
+    scatter.Completed += (sender, s) =>
+    {
+        bool successRot = s.ReadValue<Vector2>(RotationAddress, out var rotation) && SetRotation(rotation);
+        bool successPos = true;
+
+        if (s.ReadArray<TrsX>(SkeletonRoot.VerticesAddr, vertexCount) is PooledMemory<TrsX> vertices)
         {
-            scatter.PrepareReadValue<Vector2>(RotationAddress); // Rotation
-            scatter.PrepareReadArray<TrsX>(SkeletonRoot.VerticesAddr, SkeletonRoot.Count); // ESP Vertices
-
-            scatter.Completed += (sender, s) =>
+            using (vertices)
             {
-                bool successRot = false;
-                bool successPos = true;
-                if (s.ReadValue<Vector2>(RotationAddress, out var rotation))
-                    successRot = SetRotation(rotation);
-
-                if (s.ReadArray<TrsX>(SkeletonRoot.VerticesAddr, SkeletonRoot.Count) is PooledMemory<TrsX> vertices)
+                try
                 {
-                    using (vertices)
+                    // ✅ Validate vertices span
+                    if (vertices.Span.Length < vertexCount)
                     {
-                        try
+                        Debug.WriteLine($"WARNING: Read {vertices.Span.Length} vertices but expected {vertexCount} for player '{Name}'");
+                        successPos = false;
+                    }
+                    else
+                    {
+                        // Update root position
+                        _ = SkeletonRoot.UpdatePosition(vertices.Span);
+
+                        // Cache vertices for skeleton bones - ALL bones share the same vertices buffer!
+                        if (Skeleton != null)
                         {
-                            try
-                            {
-                                _ = SkeletonRoot.UpdatePosition(vertices.Span);
-                            }
-                            catch (Exception ex) // Attempt to re-allocate Transform on error
-                            {
-                                Debug.WriteLine($"ERROR getting Player '{Name}' SkeletonRoot Position: {ex}");
-                                var transform = new UnityTransform(SkeletonRoot.TransformInternal);
-                                SkeletonRoot = transform;
-                            }
-                        }
-                        catch
-                        {
-                            successPos = false;
+                            Skeleton.CacheVertices(vertices.Span);
                         }
                     }
                 }
-
-                IsError = !successRot || !successPos;
-            };
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"ERROR getting Player '{Name}' Position: {ex}");
+                    successPos = false;
+                }
+            }
+        }
+        else
+        {
+            Debug.WriteLine($"WARNING: Failed to read vertices for player '{Name}'");
+            successPos = false;
         }
 
+        IsError = !successRot || !successPos;
+    };
+}
+public virtual void EnsureSkeletonInitialized()
+{
+    // default: do nothing
+}
         /// <summary>
         /// Executed on each Transform Validation Loop.
         /// </summary>
@@ -555,6 +613,20 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                 return false;
             }
         }
+
+        /// <summary>
+        /// All implementations are 6 elements long, so this is fine for now. If the chain ever updates we'll need to tweak this.
+        /// </summary>
+        internal const int TransformInternalChainCount = 6;
+
+        /// <summary>
+        /// Get the Transform Internal Chain for this Player.
+        /// </summary>
+        /// <param name="bone">Bone to lookup.</param>
+        /// <param name="offsets">Buffer to receive offsets.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal virtual void GetTransformInternalChain(Bones bone, scoped Span<uint> offsets) =>
+            throw new NotImplementedException();
 
         #endregion
 
@@ -732,13 +804,27 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
 
         #region Interfaces
 
-        public virtual ref readonly Vector3 Position => ref SkeletonRoot.Position;
+        public virtual ref readonly Vector3 Position
+        {
+            get
+            {
+                if (SkeletonRoot != null)
+                    return ref SkeletonRoot.Position;
+                return ref _fallbackPosition;
+            }
+        }
         public Vector2 MouseoverPosition { get; set; }
 
         public void Draw(SKCanvas canvas, EftMapParams mapParams, LocalPlayer localPlayer)
         {
             try
             {
+                // Early exit if SkeletonRoot is null
+                if (SkeletonRoot == null)
+                {
+                    Debug.WriteLine($"WARNING: Cannot draw player '{Name}' - SkeletonRoot is null");
+                    return;
+                }
                 var point = Position.ToMapPos(mapParams.Map).ToZoomedPos(mapParams);
                 MouseoverPosition = new Vector2(point.X, point.Y);
                 if (!IsAlive) // Player Dead -- Draw 'X' death marker and move on
@@ -854,7 +940,6 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                 if (string.IsNullOrEmpty(line?.Trim()))
                     continue;
 
-
                 canvas.DrawText(line, point, SKTextAlign.Left, SKFonts.UIRegular, SKPaints.TextOutline); // Draw outline
                 canvas.DrawText(line, point, SKTextAlign.Left, SKFonts.UIRegular, paints.Item2); // draw line text
 
@@ -923,6 +1008,17 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                 if (GroupID != -1)
                     g = $"G:{GroupID} ";
                 if (g is not null) lines.Add(g);
+                var corpseLoot = LootObject?.Loot?.Values?.OrderLoot();
+                if (corpseLoot is not null)
+                {
+                    var sumPrice = corpseLoot.Sum(x => x.Price);
+                    var corpseValue = Utilities.FormatNumberKM(sumPrice);
+                    lines.Add($"Value: {corpseValue}"); // Player name, value
+                    if (corpseLoot.Any())
+                        foreach (var item in corpseLoot)
+                            lines.Add(item.GetUILabel());
+                    else lines.Add("Empty");
+                }
             }
             else if (IsAIActive)
             {

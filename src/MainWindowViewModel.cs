@@ -26,7 +26,9 @@ SOFTWARE.
  *
 */
 
+using LoneEftDmaRadar.DMA;
 using LoneEftDmaRadar.UI.Hotkeys;
+using LoneEftDmaRadar.UI.Misc;
 using LoneEftDmaRadar.UI.Radar.ViewModels;
 
 namespace LoneEftDmaRadar
@@ -40,6 +42,7 @@ namespace LoneEftDmaRadar
         {
             _parent = parent ?? throw new ArgumentNullException(nameof(parent));
             LoadHotkeyManager();
+            
         }
 
         public void ToggleFullscreen(bool toFullscreen)
@@ -90,6 +93,8 @@ namespace LoneEftDmaRadar
             toggleShowFood.HotkeyStateChanged += ToggleShowFood_HotkeyStateChanged;
             var toggleShowMeds = new HotkeyActionController("Toggle Show Meds");
             toggleShowMeds.HotkeyStateChanged += ToggleShowMeds_HotkeyStateChanged;
+            var engageAimbotMakcu = new HotkeyActionController("Engage Makcu Aim");
+            engageAimbotMakcu.HotkeyStateChanged += EngageAimbotMakcu_HotkeyStateChanged;
             // Add to Static Collection:
             HotkeyAction.RegisterController(zoomIn);
             HotkeyAction.RegisterController(zoomOut);
@@ -99,6 +104,7 @@ namespace LoneEftDmaRadar
             HotkeyAction.RegisterController(toggleInfo);
             HotkeyAction.RegisterController(toggleShowFood);
             HotkeyAction.RegisterController(toggleShowMeds);
+            HotkeyAction.RegisterController(engageAimbotMakcu);
         }
 
         private void ToggleAimviewWidget_HotkeyStateChanged(object sender, HotkeyEventArgs e)
@@ -114,7 +120,14 @@ namespace LoneEftDmaRadar
                 vm.ShowMeds = !vm.ShowMeds;
             }
         }
-
+        private void EngageAimbotMakcu_HotkeyStateChanged(object sender, HotkeyEventArgs e)
+        {
+            if (_parent.Makcu?.ViewModel is MakcuViewModel makcuAim)
+            {
+                // e.State == true on key down, false on key up
+                makcuAim.IsEngaged = e.State;
+            }
+        }
         private void ToggleShowFood_HotkeyStateChanged(object sender, HotkeyEventArgs e)
         {
             if (e.State && _parent.Radar?.Overlay?.ViewModel is RadarOverlayViewModel vm)

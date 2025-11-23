@@ -79,13 +79,14 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
         private static LocalPlayer LocalPlayer => Memory?.LocalPlayer;
 
         /// <summary>
-        /// All Filtered FilteredLoot on the map.
+        /// All Filtered Loot on the map.
         /// </summary>
-        private static IEnumerable<LootItem> FilteredLoot => Memory?.Loot?.FilteredLoot;
+        private static IEnumerable<LootItem> Loot => Memory?.Loot?.FilteredLoot;
+
         /// <summary>
-        /// All Unfiltered Loot on the map.
+        /// All Static Containers on the map.
         /// </summary>
-        private static IEnumerable<LootItem> AllLoot => Memory?.Loot?.AllLoot;
+        private static IEnumerable<StaticLootContainer> Containers => Memory?.Loot?.StaticContainers;
 
         /// <summary>
         /// All Players in Local Game World (including dead/exfil'd) 'Player' collection.
@@ -105,13 +106,13 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
         /// <summary>
         /// Item Search Filter has been set/applied.
         /// </summary>
-        private static bool SearchFilterIsSet =>
+        private static bool FilterIsSet =>
             !string.IsNullOrEmpty(LootFilter.SearchString);
 
         /// <summary>
         /// True if corpses are visible as loot.
         /// </summary>
-        public static bool LootCorpsesVisible => App.Config.Loot.Enabled && !App.Config.Loot.HideCorpses && !SearchFilterIsSet;
+        private static bool LootCorpsesVisible => (MainWindow.Instance?.Settings?.ViewModel?.ShowLoot ?? false) && !(MainWindow.Instance?.Radar?.Overlay?.ViewModel?.HideCorpses ?? false) && !FilterIsSet;
 
         /// <summary>
         /// Contains all 'mouse-overable' items.
@@ -122,19 +123,18 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
             {
                 var players = AllPlayers
                     .Where(x => x is not Tarkov.GameWorld.Player.LocalPlayer
-                        && !x.HasExfild && (!LootCorpsesVisible || x.IsAlive)) ??
+                        && !x.HasExfild && (LootCorpsesVisible ? x.IsAlive : true)) ??
                         Enumerable.Empty<AbstractPlayer>();
 
-                var loot = FilteredLoot ?? Enumerable.Empty<IMouseoverEntity>();
-                var containers = AllLoot?.OfType<StaticLootContainer>() ?? Enumerable.Empty<IMouseoverEntity>();
+                var loot = Loot ?? Enumerable.Empty<IMouseoverEntity>();
+                var containers = Containers ?? Enumerable.Empty<IMouseoverEntity>();
                 var exits = Exits ?? Enumerable.Empty<IMouseoverEntity>();
 
-                if (SearchFilterIsSet && !(MainWindow.Instance?.Radar?.Overlay?.ViewModel?.HideCorpses ?? false)) // Item Search
+                if (FilterIsSet && !(MainWindow.Instance?.Radar?.Overlay?.ViewModel?.HideCorpses ?? false)) // Item Search
                     players = players.Where(x =>
                         x.LootObject is null || !loot.Contains(x.LootObject)); // Don't show both corpse objects
 
-                var corpses = AllLoot?.OfType<LootCorpse>() ?? Enumerable.Empty<IMouseoverEntity>();
-                var result = loot.Concat(containers).Concat(corpses).Concat(players).Concat(exits);
+                var result = loot.Concat(containers).Concat(players).Concat(exits);
                 return result.Any() ? result : null;
             }
         }
@@ -283,39 +283,27 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
                         .Where(x => !x.HasExfild); // Skip exfil'd players
                     if (App.Config.Loot.Enabled) // Draw loot (if enabled)
                     {
-                        if (FilteredLoot?.Reverse() is IEnumerable<LootItem> loot) // Draw important loot last (on top)
+                        if (Loot?.Reverse() is IEnumerable<LootItem> loot) // Draw important loot last (on top)
                         {
                             foreach (var item in loot)
                             {
+                                if (App.Config.Loot.HideCorpses && item is LootCorpse)
+                                    continue;
                                 item.Draw(canvas, mapParams, localPlayer);
                             }
                         }
-                        if (App.Config.Containers.Enabled &&
-                            MainWindow.Instance?.Settings?.ViewModel is SettingsViewModel vm &&
-                            AllLoot?.OfType<StaticLootContainer>() is IEnumerable<StaticLootContainer> containers)
+                        if (App.Config.Containers.Enabled) // Draw Containers
                         {
-                            foreach (var container in containers) // Draw static loot containers
+                            if (Containers is IEnumerable<StaticLootContainer> containers &&
+                                MainWindow.Instance?.Settings?.ViewModel is SettingsViewModel vm)
                             {
-                                if (vm.ContainerIsTracked(container.ID ?? "NULL"))
+                                foreach (var container in containers)
                                 {
-                                    container.Draw(canvas, mapParams, localPlayer);
+                                    if (vm.ContainerIsTracked(container.ID ?? "NULL"))
+                                    {
+                                        container.Draw(canvas, mapParams, localPlayer);
+                                    }
                                 }
-                            }
-                        }
-                        if (!App.Config.Loot.HideCorpses &&
-                            LootCorpsesVisible &&
-                            AllLoot?.OfType<LootCorpse>() is IEnumerable<LootCorpse> corpses)
-                        {
-                            foreach (var corpse in corpses) // Draw corpses
-                            {
-                                corpse.Draw(canvas, mapParams, localPlayer);
-                            }
-                        }
-                        if (AllLoot?.OfType<LootAirdrop>() is IEnumerable<LootAirdrop> airdrops)
-                        {
-                            foreach (var airdrop in airdrops) // Draw Airdrops
-                            {
-                                airdrop.Draw(canvas, mapParams, localPlayer);
                             }
                         }
                     }
@@ -619,7 +607,7 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
             }
             if (MainWindow.Instance?.Radar?.Overlay?.ViewModel is RadarOverlayViewModel vm && vm.IsLootOverlayVisible)
             {
-                vm.IsLootOverlayVisible = false; // Hide FilteredLoot Overlay on Mouse Down
+                vm.IsLootOverlayVisible = false; // Hide Loot Overlay on Mouse Down
             }
         }
 
@@ -675,10 +663,6 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
                         MouseoverGroup = (player.IsHumanHostile && player.GroupID != -1)
                             ? player.GroupID
                             : (int?)null;
-                        if (LootCorpsesVisible && player.LootObject is LootCorpse playerCorpse) // Fix overlapping objects
-                        {
-                            _mouseOverItem = playerCorpse;
-                        }
                         break;
 
                     case LootCorpse corpseObj:
@@ -688,8 +672,9 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
                             ? corpse.GroupID
                             : (int?)null;
                         break;
-                    case LootItem loot:
-                        _mouseOverItem = loot;
+
+                    case LootContainer ctr:
+                        _mouseOverItem = ctr;
                         MouseoverGroup = null;
                         break;
 

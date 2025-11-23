@@ -410,5 +410,21 @@ namespace LoneEftDmaRadar.Tarkov.Unity.Structures
             var m = Matrix4x4.CreateFromQuaternion(q);
             return Vector3.Transform(vector, m);
         }
+        public static Vector3 CalculateDirection(this Vector3 s, Vector3 d)
+        {
+            Vector3 dir = d - s;
+            return Vector3.Normalize(dir);
+        }     
     }
+    public static class Vector3Extensions
+    {
+        /// <summary>
+        /// Calculate normalized direction from source to destination.
+        /// </summary>
+        public static Vector3 CalculateDirection(this Vector3 source, Vector3 destination)
+        {
+            Vector3 dir = destination - source;
+            return Vector3.Normalize(dir);
+        }
+    }     
 }

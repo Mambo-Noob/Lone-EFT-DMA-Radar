@@ -1,0 +1,265 @@
+<UserControl x:Class="LoneEftDmaRadar.UI.Radar.Views.MemWritesTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:LoneEftDmaRadar.UI.Radar.ViewModels"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Padding="10">
+    <d:UserControl.DataContext>
+        <d:DesignInstance Type="{x:Type vm:MemWritesViewModel}" IsDesignTimeCreatable="False" />
+    </d:UserControl.DataContext>
+    
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Orientation="Vertical" Margin="0,0,0,10">
+            
+            <!-- Critical Warning -->
+            <Border Background="#1A0142ff" 
+                    BorderBrush="Red" 
+                    BorderThickness="3" 
+                    CornerRadius="5" 
+                    Padding="15" 
+                    Margin="0,0,0,15">
+                <StackPanel>
+                    <TextBlock Text="?? CRITICAL WARNING ??" 
+                               FontWeight="Bold" 
+                               Foreground="Red" 
+                               FontSize="18"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,10"/>
+                    <TextBlock TextWrapping="Wrap" 
+                               Foreground="OrangeRed"
+                               FontWeight="Bold"
+                               FontSize="12"
+                               HorizontalAlignment="Center">
+                        Memory writes DIRECTLY MODIFY GAME MEMORY and are HIGHLY DETECTABLE!<LineBreak/>
+                        Using these features significantly INCREASES your risk of detection and account ban!<LineBreak/>
+                        <LineBreak/>
+                        USE AT YOUR OWN RISK - YOU HAVE BEEN WARNED!
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+
+            <!-- Master Enable -->
+            <GroupBox Header="Master Control" Margin="0,0,0,15">
+                <StackPanel Margin="10">
+                    <CheckBox Content="Enable Memory Writes" 
+                              IsChecked="{Binding Enabled, Mode=TwoWay}" 
+                              FontWeight="Bold"
+                              FontSize="14"
+                              Foreground="Red"
+                              Margin="0,5,0,10"/>
+                    
+                    <TextBlock Text="This master switch must be enabled for ANY memory write features to work." 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="0,0,0,5"/>
+                    
+                    <TextBlock Text="Disabling this will turn off all memory write features below." 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11"/>
+                </StackPanel>
+            </GroupBox>
+            <!-- Silent Aim -->
+            <GroupBox Header="? Silent Aim (Silent Aim)" Margin="0,0,0,15">
+                <StackPanel Margin="10" IsEnabled="{Binding Enabled}">
+                    <CheckBox Content="Enable Silent Aim" 
+                              IsChecked="{Binding MemoryAimEnabled, Mode=TwoWay}" 
+                              FontWeight="Bold"
+                              Margin="0,5,0,10"/>
+
+                    <TextBlock Text="Modifies shot direction in memory instead of moving mouse." 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="0,0,0,5"/>
+
+                    <TextBlock Text="Works with MakcuAimbot (use same aim key) - no Makcu device needed!" 
+                               TextWrapping="Wrap" 
+                               Foreground="LimeGreen" 
+                               FontWeight="Bold"
+                               FontSize="11" 
+                               Margin="0,0,0,5"/>
+
+                    <TextBlock Text="Configure targeting in the MakcuAimbot tab." 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="0,0,0,10"/>
+
+                    <Border Background="#1A4200ff" 
+                            BorderBrush="LimeGreen" 
+                            BorderThickness="1" 
+                            CornerRadius="3" 
+                            Padding="10" 
+                            Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="?? How it works:" 
+                                       FontWeight="Bold" 
+                                       Foreground="LimeGreen"/>
+                            <TextBlock TextWrapping="Wrap" 
+                                       Foreground="Gray"
+                                       FontSize="11"
+                                       Margin="0,5,0,0">
+                                ? When aim key is held, calculates direction to target<LineBreak/>
+                                ? Writes shot direction directly to memory<LineBreak/>
+                                ? Bullets go where you aim without moving mouse<LineBreak/>
+                                ? Works with all MakcuAimbot features (FOV, prediction, filters)<LineBreak/>
+                                ? No hardware device required!
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Background="#1A0505ff" 
+                            BorderBrush="Orange" 
+                            BorderThickness="1" 
+                            CornerRadius="3" 
+                            Padding="10" 
+                            Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="?? Detection Risk: VERY HIGH" 
+                                       FontWeight="Bold" 
+                                       Foreground="Red"/>
+                            <TextBlock Text="Silent aim is one of the most detectable cheats. Extremely obvious to anti-cheat." 
+                                       TextWrapping="Wrap" 
+                                       Foreground="Gray"
+                                       FontSize="11"
+                                       Margin="0,5,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </GroupBox>
+            <!-- No Recoil -->
+            <GroupBox Header="? No Recoil" Margin="0,0,0,15">
+                <StackPanel Margin="10" IsEnabled="{Binding Enabled}">
+                    <CheckBox Content="Enable No Recoil" 
+                              IsChecked="{Binding NoRecoilEnabled, Mode=TwoWay}" 
+                              FontWeight="Bold"
+                              Margin="0,5,0,10"/>
+
+                    <TextBlock Text="Reduces weapon recoil and sway. 100% = no recoil, 0% = normal recoil" 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="0,0,0,10"/>
+
+                    <!-- Recoil Amount -->
+                    <StackPanel Margin="0,5" IsEnabled="{Binding NoRecoilEnabled}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Recoil Reduction:" Width="140"/>
+                            <TextBlock Text="{Binding NoRecoilAmount, StringFormat='{}{0:F0}%'}" 
+                                       FontWeight="Bold"
+                                       Foreground="DodgerBlue"/>
+                        </StackPanel>
+                        <Slider Value="{Binding NoRecoilAmount, Mode=TwoWay}" 
+                                Minimum="0" Maximum="100" 
+                                TickFrequency="5" 
+                                IsSnapToTickEnabled="True"
+                                Margin="0,5,0,0"/>
+                    </StackPanel>
+
+                    <!-- Sway Amount -->
+                    <StackPanel Margin="0,15" IsEnabled="{Binding NoRecoilEnabled}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Sway Reduction:" Width="140"/>
+                            <TextBlock Text="{Binding NoSwayAmount, StringFormat='{}{0:F0}%'}" 
+                                       FontWeight="Bold"
+                                       Foreground="DodgerBlue"/>
+                        </StackPanel>
+                        <Slider Value="{Binding NoSwayAmount, Mode=TwoWay}" 
+                                Minimum="0" Maximum="100" 
+                                TickFrequency="5" 
+                                IsSnapToTickEnabled="True"
+                                Margin="0,5,0,0"/>
+                    </StackPanel>
+
+                    <Border Background="#1A0505ff" 
+                            BorderBrush="Orange" 
+                            BorderThickness="1" 
+                            CornerRadius="3" 
+                            Padding="10" 
+                            Margin="0,15,0,0">
+                        <StackPanel>
+                            <TextBlock Text="?? Detection Risk: HIGH" 
+                                       FontWeight="Bold" 
+                                       Foreground="OrangeRed"/>
+                            <TextBlock Text="Directly modifies weapon behavior in memory. Very easy to detect." 
+                                       TextWrapping="Wrap" 
+                                       Foreground="Gray"
+                                       FontSize="11"
+                                       Margin="0,5,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Infinite Stamina -->
+            <GroupBox Header="? Infinite Stamina" Margin="0,0,0,15">
+                <StackPanel Margin="10" IsEnabled="{Binding Enabled}">
+                    <CheckBox Content="Enable Infinite Stamina" 
+                              IsChecked="{Binding InfiniteStaminaEnabled, Mode=TwoWay}" 
+                              FontWeight="Bold"
+                              Margin="0,5,0,10"/>
+
+                    <TextBlock Text="Automatically refills stamina and oxygen when they drop below 33%." 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="0,0,0,5"/>
+                    
+                    <TextBlock Text="Also bypasses fatigue states to prevent movement penalties." 
+                               TextWrapping="Wrap" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="0,0,0,10"/>
+
+                    <Border Background="#1A0505ff" 
+                            BorderBrush="Orange" 
+                            BorderThickness="1" 
+                            CornerRadius="3" 
+                            Padding="10" 
+                            Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="?? Detection Risk: MEDIUM" 
+                                       FontWeight="Bold" 
+                                       Foreground="Orange"/>
+                            <TextBlock Text="Modifies player stats. Less obvious than recoil but still detectable." 
+                                       TextWrapping="Wrap" 
+                                       Foreground="Gray"
+                                       FontSize="11"
+                                       Margin="0,5,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Help/Info -->
+            <GroupBox Header="?? Important Information" Margin="0,0,0,10">
+                <TextBlock TextWrapping="Wrap" 
+                           Margin="10"
+                           LineHeight="20">
+                    <Run Text="Memory Write Features:" FontWeight="Bold"/><LineBreak/>
+                    <LineBreak/>
+                    ? These features write directly to game memory<LineBreak/>
+                    ? They are MUCH more detectable than read-only features<LineBreak/>
+                    ? Use them sparingly and at your own risk<LineBreak/>
+                    ? Consider them "burn" features - use only if willing to risk account<LineBreak/>
+                    <LineBreak/>
+                    <Run Text="Recommendations:" FontWeight="Bold"/><LineBreak/>
+                    <LineBreak/>
+                    ? Use on throwaway accounts only<LineBreak/>
+                    ? Don't use during high-traffic times<LineBreak/>
+                    ? Avoid obvious patterns (e.g. zero recoil)<LineBreak/>
+                    ? Keep values realistic (60-80% reduction max)<LineBreak/>
+                    <LineBreak/>
+                    <Run Text="If detected:" FontWeight="Bold" Foreground="Red"/><LineBreak/>
+                    <Run Text="You will likely receive an account ban. There is no appeal process." 
+                         Foreground="Red"/>
+                </TextBlock>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

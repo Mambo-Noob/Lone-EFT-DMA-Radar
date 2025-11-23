@@ -329,7 +329,7 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
         }
 
         /// <summary>
-        /// Refreshes the FilteredLoot Filter.
+        /// Refreshes the Loot Filter.
         /// Should be called at startup and during validation.
         /// </summary>
         private static void RefreshLootFilter()

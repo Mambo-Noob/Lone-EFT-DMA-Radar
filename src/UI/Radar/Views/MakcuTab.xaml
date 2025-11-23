@@ -1,0 +1,178 @@
+<UserControl x:Class="LoneEftDmaRadar.UI.Radar.Views.MakcuTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:LoneEftDmaRadar.UI.Radar.ViewModels"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Padding="10">
+    <d:UserControl.DataContext>
+        <d:DesignInstance Type="{x:Type vm:MakcuViewModel}" IsDesignTimeCreatable="False" />
+    </d:UserControl.DataContext>
+    
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Orientation="Vertical" Margin="0,0,0,10">
+            
+            <!-- Device Connection -->
+            <GroupBox Header="Device Connection" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Status:" FontWeight="Bold" Margin="8,8,8,4" />
+                    <TextBlock Text="{Binding ConnectionStatus}" Margin="8,0,8,8" />
+                    
+                    <TextBlock Text="Device Version:" FontWeight="Bold" Margin="8,8,8,4" />
+                    <TextBlock Text="{Binding DeviceVersion}" Margin="8,0,8,8" />
+                    
+                    <CheckBox Content="Auto-connect on startup"
+                              IsChecked="{Binding AutoConnect, Mode=TwoWay}"
+                              Margin="8,4,8,8" />
+                    
+                    <TextBlock Text="Available Devices:" FontWeight="Bold" Margin="8,8,8,4" />
+                    <ComboBox ItemsSource="{Binding AvailableDevices}"
+                              SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                              Margin="8,4,8,8"
+                              MinHeight="30">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Port}" FontWeight="Bold" Margin="0,0,8,0"/>
+                                    <TextBlock Text="-" Margin="0,0,8,0" Foreground="Gray"/>
+                                    <TextBlock Text="{Binding Description}" Foreground="DarkGray"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    
+                    <WrapPanel Margin="0,8,0,8">
+                        <Button Content="Refresh Devices"
+                                Command="{Binding RefreshDevicesCommand}"
+                                MinWidth="120"
+                                Height="35"
+                                Margin="8,0,8,0" />
+                        
+                        <Button Content="Connect"
+                                Command="{Binding ConnectCommand}"
+                                MinWidth="120"
+                                Height="35"
+                                Margin="8,0,8,0" />
+                        
+                        <Button Content="Disconnect"
+                                Command="{Binding DisconnectCommand}"
+                                MinWidth="120"
+                                Height="35"
+                                Margin="8,0,8,0" />
+                    </WrapPanel>
+                    
+                    <Button Content="? Test Mouse Movement" 
+                            Command="{Binding TestMoveCommand}" 
+                            Padding="15,8" 
+                            Background="#E3F2FD"
+                            BorderBrush="DodgerBlue"
+                            ToolTip="Moves the mouse in a test pattern to verify the device is working"
+                            IsEnabled="{Binding IsConnected}"/>
+                    <TextBlock Text="? (Device must be connected)" 
+                               VerticalAlignment="Center" 
+                               Foreground="Gray" 
+                               FontSize="11" 
+                               Margin="10,5,0,0"/>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Aimbot Settings -->
+            <GroupBox Header="Aimbot Settings" Margin="0,0,0,12">
+                <StackPanel>
+                    <CheckBox Content="Enable Makcu Aimbot"
+                              IsChecked="{Binding Enabled, Mode=TwoWay}"
+                              FontWeight="Bold"
+                              Margin="8,8,8,8" />
+                    
+                    <CheckBox Content="Show Debug Overlay (ESP)"
+                              IsChecked="{Binding ShowDebug, Mode=TwoWay}"
+                              Margin="8,4,8,8"
+                              ToolTip="Shows detailed debug information on the ESP overlay"/>
+                    
+                    <TextBlock Text="Target Bone" FontWeight="Bold" Margin="8,8,8,4" />
+                    <ComboBox ItemsSource="{Binding AvailableBones}"
+                              SelectedItem="{Binding TargetBone, Mode=TwoWay}"
+                              Margin="8,4,8,8" />
+                    
+                    <TextBlock Text="Targeting Mode" FontWeight="Bold" Margin="8,8,8,4" />
+                    <ComboBox SelectedIndex="{Binding TargetingMode, Mode=TwoWay}"
+                              Margin="8,4,8,8">
+                        <ComboBoxItem Content="Closest to Crosshair (FOV)" />
+                        <ComboBoxItem Content="Closest Distance" />
+                    </ComboBox>
+                    
+                    <TextBlock Text="{Binding FOV, StringFormat='FOV: {0:F0}'}" 
+                               FontWeight="Bold"
+                               Margin="8,8,8,4" />
+                    <Slider Value="{Binding FOV, Mode=TwoWay}"
+                            Minimum="10"
+                            Maximum="500"
+                            TickFrequency="10"
+                            IsSnapToTickEnabled="True"
+                            Margin="8,4,8,8" />
+                    
+                    <TextBlock Text="{Binding MaxDistance, StringFormat='Max Distance: {0:F0}m'}" 
+                               FontWeight="Bold"
+                               Margin="8,8,8,4" />
+                    <Slider Value="{Binding MaxDistance, Mode=TwoWay}"
+                            Minimum="50"
+                            Maximum="500"
+                            TickFrequency="50"
+                            IsSnapToTickEnabled="True"
+                            Margin="8,4,8,8" />
+                    
+                    <CheckBox Content="Enable Bullet Drop Prediction"
+                              IsChecked="{Binding EnablePrediction, Mode=TwoWay}"
+                              Margin="8,4,8,8" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Target Filters -->
+            <GroupBox Header="Target Filters" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Select which player types to target" 
+                               TextWrapping="Wrap"
+                               Margin="8,8,8,8"
+                               Foreground="Gray" />
+                    
+                    <CheckBox Content="Target PMC Players"
+                              IsChecked="{Binding TargetPMC, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Target Player Scavs"
+                              IsChecked="{Binding TargetPlayerScav, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Target AI Scavs"
+                              IsChecked="{Binding TargetAIScav, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Target Bosses"
+                              IsChecked="{Binding TargetBoss, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Target Raiders"
+                              IsChecked="{Binding TargetRaider, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Help Text -->
+            <GroupBox Header="Usage" Margin="0,0,0,12">
+                <TextBlock TextWrapping="Wrap" 
+                           Margin="8,8,8,8">
+                    1. Connect your Makcu device using the dropdown above<LineBreak />
+                    2. Enable the aimbot with the checkbox<LineBreak />
+                    3. Hold a configured mouse button (set on Makcu) to activate<LineBreak />
+                    4. The aimbot will automatically target enemies within FOV<LineBreak />
+                    <LineBreak />
+                    Note: Memory write features (No Recoil, etc.) are now in the "MemWrites" tab.<LineBreak />
+                    <LineBreak />
+                    Make sure your Makcu firmware is up to date.
+                </TextBlock>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

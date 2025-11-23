@@ -48,9 +48,9 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers
         public IReadOnlyList<LootItem> FilteredLoot { get; private set; }
 
         /// <summary>
-        /// All unfiltered loot.
+        /// All Static Containers on the map.
         /// </summary>
-        public IEnumerable<LootItem> AllLoot => _loot.Values;
+        public IEnumerable<StaticLootContainer> StaticContainers => _loot.Values.OfType<StaticLootContainer>();
 
         public LootManager(ulong localGameWorld)
         {
@@ -73,7 +73,6 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers
                 {
                     var filter = LootFilter.Create();
                     FilteredLoot = _loot.Values?
-                        .OfType<LootItem>()
                         .Where(x => filter(x))
                         .OrderByDescending(x => x.Important)
                         .ThenByDescending(x => x?.Price ?? 0)
@@ -112,7 +111,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers
         #region Private Methods
 
         /// <summary>
-        /// Updates referenced FilteredLoot List with fresh values.
+        /// Updates referenced Loot List with fresh values.
         /// </summary>
         private void GetLoot(CancellationToken ct)
         {
@@ -204,13 +203,6 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers
                 };
             }
             map.Execute(); // execute scatter read
-            // Post Scatter Read - Sync Corpses
-            var deadPlayers = Memory.Players?
-                .Where(x => x.Corpse is not null)?.ToList();
-            foreach (var corpse in _loot.Values.OfType<LootCorpse>())
-            {
-                corpse.Sync(deadPlayers);
-            }
         }
 
         /// <summary>
@@ -233,7 +225,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers
                 var pos = new UnityTransform(p.TransformInternal, true).UpdatePosition();
                 if (isCorpse)
                 {
-                    var corpse = new LootCorpse(interactiveClass, pos);
+                    var corpse = new LootCorpse(pos);
                     _ = _loot.TryAdd(p.ItemBase, corpse);
                 }
                 if (isContainer)

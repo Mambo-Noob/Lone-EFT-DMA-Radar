@@ -1,43 +1,40 @@
 ﻿/*
  * Lone EFT DMA Radar
- * Brought to you by Lone (Lone DMA)
- * 
-MIT License
+ * MIT License - Copyright (c) 2025 Lone DMA
+ */
 
-Copyright (c) 2025 Lone DMA
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
- *
-*/
-
+using LoneEftDmaRadar.Tarkov.Mono.Collections;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
+using LoneEftDmaRadar.UI.Misc;
+using VmmSharpEx.Scatter;
 
 namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
 {
     public sealed class LocalPlayer : ClientPlayer
     {
         public static ulong HandsController { get; private set; }
+
+        /// <summary>
+        /// Firearm Manager for tracking weapon/ammo/ballistics.
+        /// </summary>
+        public FirearmManager FirearmManager { get; private set; }
+
         /// <summary>
         /// All Items on the Player's WishList.
         /// </summary>
         public static IReadOnlySet<string> WishlistItems => _wishlistItems;
         private static readonly HashSet<string> _wishlistItems = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Spawn Point.
+        /// </summary>
+        public string EntryPoint { get; }
+
+        /// <summary>
+        /// Profile ID (if Player Scav).
+        /// Used for Exfils.
+        /// </summary>
+        public string ProfileId { get; }
 
         /// <summary>
         /// Player name.
@@ -47,6 +44,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
             get => "localPlayer";
             set { }
         }
+
         /// <summary>
         /// Player is Human-Controlled.
         /// </summary>
@@ -57,7 +55,72 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
             string classType = ObjectClass.ReadName(this);
             if (!(classType == "LocalPlayer" || classType == "ClientPlayer"))
                 throw new ArgumentOutOfRangeException(nameof(classType));
+
             IsHuman = true;
+            
+            // Initialize FirearmManager
+            FirearmManager = new FirearmManager(this);
+
+            if (IsPmc)
+            {
+                var entryPtr = Memory.ReadPtr(Info + Offsets.PlayerInfo.EntryPoint);
+                EntryPoint = Memory.ReadUnicodeString(entryPtr);
+            }
+            else if (IsScav)
+            {
+                var profileIdPtr = Memory.ReadPtr(Profile + Offsets.Profile.Id);
+                ProfileId = Memory.ReadUnicodeString(profileIdPtr);
+            }
+        }
+
+        /// <summary>
+        /// Update FirearmManager (call this in the realtime loop or update cycle).
+        /// </summary>
+        public void UpdateFirearmManager()
+        {
+            try
+            {
+                FirearmManager?.Update();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[LocalPlayer] FirearmManager update failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Checks if LocalPlayer is Aiming (ADS).
+        /// </summary>
+        /// <returns>True if aiming (ADS), otherwise False.</returns>
+        public bool CheckIfADS()
+        {
+            try
+            {
+                return Memory.ReadValue<bool>(PWA + Offsets.ProceduralWeaponAnimation._isAiming, false);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"CheckIfADS() ERROR: {ex}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Extended realtime loop that includes FirearmManager updates.
+        /// </summary>
+        public override void OnRealtimeLoop(VmmScatter scatter)
+        {
+            base.OnRealtimeLoop(scatter);
+            
+            // Update hands controller
+            scatter.PrepareReadPtr(HandsControllerAddr);
+            scatter.Completed += (sender, s) =>
+            {
+                if (s.ReadPtr(HandsControllerAddr, out var hands))
+                {
+                    HandsController = hands;
+                }
+            };
         }
     }
 }

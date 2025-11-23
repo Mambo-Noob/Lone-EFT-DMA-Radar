@@ -1,0 +1,277 @@
+<UserControl x:Class="LoneEftDmaRadar.UI.Radar.Views.EspTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:LoneEftDmaRadar.UI.Radar.ViewModels"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Padding="10">
+    <d:UserControl.DataContext>
+        <d:DesignInstance Type="{x:Type vm:EspViewModel}" IsDesignTimeCreatable="False" />
+    </d:UserControl.DataContext>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Orientation="Vertical" Margin="0,0,0,10">
+            
+            <!-- ESP Control -->
+            <GroupBox Header="ESP Control" Margin="0,0,0,12">
+                <StackPanel>
+                    <WrapPanel Margin="0,8,0,8">
+                        <Button Content="Open ESP Window"
+                                Command="{Binding OpenEspCommand}"
+                                MinWidth="120"
+                                Height="35"
+                                Margin="8,0,12,8" />
+                        
+                        <Button Content="Close ESP Window"
+                                Command="{Binding CloseEspCommand}"
+                                MinWidth="120"
+                                Height="35"
+                                Margin="8,0,12,8" />
+                    </WrapPanel>
+                    
+                    <CheckBox Content="Show Debug Info"
+                              IsChecked="{Binding ShowDebug, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <TextBlock TextWrapping="Wrap" 
+                               Margin="8,12,8,8"
+                               Foreground="Gray">
+                        The ESP window appears as a transparent overlay.<LineBreak />
+                        Position it over your game window for in-game visualization.
+                    </TextBlock>
+                </StackPanel>
+            </GroupBox>
+            <GroupBox Header="Monitor and Resolution" Margin="0,0,0,12">
+                <StackPanel>
+                    <CheckBox Content="Auto-open ESP on startup"
+                              IsChecked="{Binding AutoOpen, Mode=TwoWay}"
+                              Margin="8,8,8,8" />
+                    
+                    <TextBlock Text="Select Monitor" 
+                               FontWeight="Bold"
+                               Margin="8,8,8,4" />
+                    
+                    <ComboBox ItemsSource="{Binding AvailableMonitors}"
+                              SelectedItem="{Binding SelectedMonitor, Mode=TwoWay}"
+                              DisplayMemberPath="DisplayName"
+                              Margin="8,4,8,8" />
+                    
+                    <Button Content="Refresh Monitors"
+                            Command="{Binding RefreshMonitorsCommand}"
+                            Height="30"
+                            Margin="8,4,8,8" />
+                    
+                    <TextBlock Text="Resolution" 
+                               FontWeight="Bold"
+                               Margin="8,8,8,4" />
+                    
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Width:" Width="60" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding ResolutionWidth, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="100" />
+                        <TextBlock Text="Height:" Width="60" VerticalAlignment="Center" Margin="20,0,0,0" />
+                        <TextBox Text="{Binding ResolutionHeight, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="100" />
+                    </StackPanel>
+                    
+                    <Button Content="Auto-detect Resolution from Selected Monitor"
+                            Command="{Binding DetectResolutionCommand}"
+                            Height="30"
+                            Margin="8,4,8,8" />
+                    
+                    <TextBlock TextWrapping="Wrap" 
+                               Margin="8,4,8,8"
+                               Foreground="Gray">
+                        Select which monitor to display the ESP overlay on.<LineBreak />
+                        Resolution will auto-detect, or you can manually set it.
+                    </TextBlock>
+                </StackPanel>
+            </GroupBox>
+            <!-- Players -->
+            <GroupBox Header="Players" Margin="0,0,0,12">
+                <StackPanel>
+                    <CheckBox Content="Show Players"
+                              IsChecked="{Binding ShowPlayers, Mode=TwoWay}"
+                              FontWeight="Bold"
+                              Margin="8,8,8,8" />
+                    
+                    <TextBlock Text="Display Options" 
+                               FontWeight="Bold"
+                               Margin="8,8,8,4" />
+                    
+                    <CheckBox Content="Show Box"
+                              IsChecked="{Binding ShowBox, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Skeleton"
+                              IsChecked="{Binding ShowSkeleton, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Head Dot"
+                              IsChecked="{Binding ShowHeadDot, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Names"
+                              IsChecked="{Binding ShowNames, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Distance"
+                              IsChecked="{Binding ShowDistance, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Health"
+                              IsChecked="{Binding ShowHealth, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Player Types -->
+            <GroupBox Header="Player Types" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Visible Player Types" 
+                               FontWeight="Bold"
+                               Margin="8,8,8,4" />
+                    
+                    <CheckBox Content="Show PMC"
+                              IsChecked="{Binding ShowPMC, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Teammates"
+                              IsChecked="{Binding ShowTeammate, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Player Scavs"
+                              IsChecked="{Binding ShowPScav, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show AI Scavs"
+                              IsChecked="{Binding ShowAIScav, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Raiders"
+                              IsChecked="{Binding ShowAIRaider, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Bosses"
+                              IsChecked="{Binding ShowAIBoss, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                    
+                    <CheckBox Content="Show Special Players"
+                              IsChecked="{Binding ShowSpecialPlayer, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Distance Filters -->
+            <GroupBox Header="Distance Filters (0 = Unlimited)" Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock Text="Max distance to show each player type (meters)" 
+                               TextWrapping="Wrap"
+                               Margin="8,8,8,8"
+                               Foreground="Gray" />
+                    
+                    <!-- PMC -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="PMC:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistancePMC, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <!-- Teammate -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Teammate:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceTeammate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <!-- PScav -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Player Scav:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistancePScav, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <!-- AI Scav -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="AI Scav:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceAIScav, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <!-- Raider -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Raider:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceAIRaider, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <!-- Boss -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Boss:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceAIBoss, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <!-- Special -->
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Special Player:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceSpecialPlayer, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Loot -->
+            <GroupBox Header="Loot" Margin="0,0,0,12">
+                <StackPanel>
+                    <CheckBox Content="Show Loot"
+                              IsChecked="{Binding ShowLoot, Mode=TwoWay}"
+                              FontWeight="Bold"
+                              Margin="8,8,8,8" />
+                    
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Max Distance:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceLoot, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <TextBlock Text="Uses filtered loot from Radar settings" 
+                               TextWrapping="Wrap"
+                               Margin="8,4,8,8"
+                               Foreground="Gray" />
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Containers -->
+            <GroupBox Header="Containers" Margin="0,0,0,12">
+                <StackPanel>
+                    <CheckBox Content="Show Containers"
+                              IsChecked="{Binding ShowContainers, Mode=TwoWay}"
+                              FontWeight="Bold"
+                              Margin="8,8,8,8" />
+                    
+                    <StackPanel Orientation="Horizontal" Margin="8,4,8,4">
+                        <TextBlock Text="Max Distance:" Width="120" VerticalAlignment="Center" />
+                        <TextBox Text="{Binding MaxDistanceContainers, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="80" />
+                        <TextBlock Text="m" Margin="4,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    
+                    <TextBlock Text="Uses tracked containers from Settings" 
+                               TextWrapping="Wrap"
+                               Margin="8,4,8,8"
+                               Foreground="Gray" />
+                </StackPanel>
+            </GroupBox>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

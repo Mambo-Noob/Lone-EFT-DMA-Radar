@@ -43,7 +43,7 @@ namespace LoneEftDmaRadar
         /// </summary>
         [MaybeNull]
         public static MainWindow Instance { get; private set; }
-
+    
         /// <summary>
         /// ViewModel for the MainWindow.
         /// </summary>

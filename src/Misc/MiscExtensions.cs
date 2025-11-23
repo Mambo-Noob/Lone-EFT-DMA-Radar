@@ -377,5 +377,5 @@ namespace LoneEftDmaRadar.Misc
             }
             return TimeSpan.FromSeconds(2);
         }
-    }
+    }   
 }

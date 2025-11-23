@@ -28,6 +28,7 @@ SOFTWARE.
 
 using LoneEftDmaRadar.DMA;
 using LoneEftDmaRadar.Misc.JSON;
+using LoneEftDmaRadar.Tarkov.Unity.Structures;
 using LoneEftDmaRadar.UI.ColorPicker;
 using LoneEftDmaRadar.UI.Data;
 using LoneEftDmaRadar.UI.Loot;
@@ -87,7 +88,7 @@ namespace LoneEftDmaRadar
         public WebRadarConfig WebRadar { get; private set; } = new();
 
         /// <summary>
-        /// FilteredLoot Config
+        /// Loot Config
         /// </summary>
         [JsonPropertyName("loot")]
         [JsonInclude]
@@ -129,6 +130,25 @@ namespace LoneEftDmaRadar
         [JsonPropertyName("infoWidget")]
         public InfoWidgetConfig InfoWidget { get; private set; } = new();
 
+        /// <summary>
+        /// Widgets Configuration.
+        /// </summary>
+        [JsonInclude]
+        [JsonPropertyName("esp")]
+        public EspConfig ESP { get; private set; } = new();
+
+        /// <summary>
+        /// Settings for Makcu Aim.
+        /// </summary>
+        [JsonInclude]
+        [JsonPropertyName("makcu")]
+        public MakcuConfig Makcu { get; private set; } = new();
+        /// <summary>
+        /// Settings for Makcu Aim.
+        /// </summary>
+        [JsonInclude]
+        [JsonPropertyName("memWrites")]
+        public MemWritesConfig MemWrites { get; private set; } = new();
         /// <summary>
         /// Player Watchlist Collection.
         /// ** ONLY USE FOR BINDING **
@@ -306,7 +326,7 @@ namespace LoneEftDmaRadar
         };
 
         /// <summary>
-        /// FilteredLoot Filters Config.
+        /// Loot Filters Config.
         /// </summary>
         [JsonInclude]
         [JsonPropertyName("lootFilters")]
@@ -318,7 +338,7 @@ namespace LoneEftDmaRadar
         /// Filename of this Config File (not full path).
         /// </summary>
         [JsonIgnore]
-        internal const string Filename = "Config-EFT.json";
+        internal const string Filename = "Config-EFT-Mambo.json";
 
         [JsonIgnore]
         private static readonly Lock _syncRoot = new();
@@ -466,7 +486,101 @@ namespace LoneEftDmaRadar
         [JsonPropertyName("enableMemMap")]
         public bool MemMapEnabled { get; set; } = true;
     }
+    public class EspConfig
+    {
+        // Window Settings
+        public bool AutoOpen { get; set; } = false;
+        public int SelectedMonitor { get; set; } = 0; // Primary monitor by default
+        public Size Resolution { get; set; } = new(1920, 1080);
 
+        // General
+        public bool ShowDebug { get; set; } = false;
+
+        // Players
+        public bool ShowPlayers { get; set; } = true;
+        public bool ShowBox { get; set; } = true;
+        public bool ShowSkeleton { get; set; } = false;
+        public bool ShowHeadDot { get; set; } = true;
+        public bool ShowNames { get; set; } = true;
+        public bool ShowDistance { get; set; } = true;
+        public bool ShowHealth { get; set; } = true;
+
+        // Player Types
+        public bool ShowPMC { get; set; } = true;
+        public bool ShowTeammate { get; set; } = true;
+        public bool ShowPScav { get; set; } = true;
+        public bool ShowAIScav { get; set; } = true;
+        public bool ShowAIRaider { get; set; } = true;
+        public bool ShowAIBoss { get; set; } = true;
+        public bool ShowSpecialPlayer { get; set; } = true;
+
+        // Distance Filters (0 = unlimited)
+        public float MaxDistancePMC { get; set; } = 0;
+        public float MaxDistanceTeammate { get; set; } = 0;
+        public float MaxDistancePScav { get; set; } = 0;
+        public float MaxDistanceAIScav { get; set; } = 150;
+        public float MaxDistanceAIRaider { get; set; } = 0;
+        public float MaxDistanceAIBoss { get; set; } = 0;
+        public float MaxDistanceSpecialPlayer { get; set; } = 0;
+
+        // Loot
+        public bool ShowLoot { get; set; } = false;
+        public float MaxDistanceLoot { get; set; } = 50;
+
+        // Containers
+        public bool ShowContainers { get; set; } = false;
+        public float MaxDistanceContainers { get; set; } = 30;
+
+        // Colors (stored as ARGB hex strings)
+        public string ColorPMC { get; set; } = "#FFFF0000"; // Red
+        public string ColorTeammate { get; set; } = "#FF00FF00"; // Green
+        public string ColorPScav { get; set; } = "#FFFFC0CB"; // Pink
+        public string ColorAIScav { get; set; } = "#FFFFA500"; // Orange
+        public string ColorAIRaider { get; set; } = "#FFFFFF00"; // Yellow
+        public string ColorAIBoss { get; set; } = "#FFFF00FF"; // Magenta
+        public string ColorSpecialPlayer { get; set; } = "#FF00FFFF"; // Cyan
+        public string ColorLoot { get; set; } = "#FFFFFF00"; // Yellow
+        public string ColorContainer { get; set; } = "#FF00CED1"; // DarkTurquoise
+    }
+    public sealed class MakcuConfig
+    {
+        public bool Enabled { get; set; }
+        public bool AutoConnect { get; set; }
+        public string LastComPort { get; set; }
+        
+        // Debug
+        public bool ShowDebug { get; set; } = true;
+        
+        // Targeting
+        public Bones TargetBone { get; set; } = Bones.HumanHead;
+        public float FOV { get; set; } = 90f;
+        public float MaxDistance { get; set; } = 300f;
+        public TargetingMode Targeting { get; set; } = TargetingMode.ClosestToCrosshair;
+        public bool EnablePrediction { get; set; } = true;
+        
+        // Target Filters
+        public bool TargetPMC { get; set; } = true;
+        public bool TargetPlayerScav { get; set; } = true;
+        public bool TargetAIScav { get; set; } = true;
+        public bool TargetBoss { get; set; } = true;
+        public bool TargetRaider { get; set; } = true;
+
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public enum TargetingMode
+        {
+            ClosestToCrosshair,
+            ClosestDistance
+        }
+    }
+    public class MemWritesConfig
+    {
+        public bool Enabled { get; set; } = false;
+        public bool NoRecoilEnabled { get; set; } = false;
+        public float NoRecoilAmount { get; set; } = 80f;
+        public float NoSwayAmount { get; set; } = 80f;
+        public bool InfiniteStaminaEnabled { get; set; } = false;
+        public bool MemoryAimEnabled { get; set; } = false;
+    }
     public sealed class UIConfig
     {
         /// <summary>
@@ -480,6 +594,11 @@ namespace LoneEftDmaRadar
         /// </summary>
         [JsonPropertyName("windowSize")]
         public Size WindowSize { get; set; } = new(1280, 720);
+        /// <summary>
+        /// Size of the Radar Window.
+        /// </summary>
+        [JsonPropertyName("resolution")]
+        public Size Resolution { get; set; } = new(1920, 1080);
 
         /// <summary>
         /// Window is maximized.
@@ -569,13 +688,13 @@ namespace LoneEftDmaRadar
         public int MinValueValuable { get; set; } = 200000;
 
         /// <summary>
-        /// Show FilteredLoot by "Price per Slot".
+        /// Show Loot by "Price per Slot".
         /// </summary>
         [JsonPropertyName("pricePerSlot")]
         public bool PricePerSlot { get; set; }
 
         /// <summary>
-        /// FilteredLoot Price Mode.
+        /// Loot Price Mode.
         /// </summary>
         [JsonPropertyName("priceMode")]
         public LootPriceMode PriceMode { get; set; } = LootPriceMode.FleaMarket;
@@ -618,7 +737,7 @@ namespace LoneEftDmaRadar
     }
 
     /// <summary>
-    /// FilteredLoot Filter Config.
+    /// Loot Filter Config.
     /// </summary>
     public sealed class LootFilterConfig
     {

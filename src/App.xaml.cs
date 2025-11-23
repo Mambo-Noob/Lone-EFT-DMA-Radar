@@ -70,12 +70,15 @@ namespace LoneEftDmaRadar
         internal const string Name = "Lone EFT DMA Radar";
         private const string MUTEX_ID = "0f908ff7-e614-6a93-60a3-cee36c9cea91";
         private static readonly Mutex _mutex;
-
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetProcessDPIAware();
+        private static readonly DirectoryInfo _oldConfigPath =
+            new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "eft-dma-radar-4e90"));
         /// <summary>
         /// Path to the Configuration Folder in %AppData%
         /// </summary>
         public static DirectoryInfo ConfigPath { get; } =
-            new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Lone-EFT-DMA"));
+            new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Lone-EFT-DMA-Mambo"));
         /// <summary>
         /// Global Program Configuration.
         /// </summary>
@@ -123,6 +126,11 @@ namespace LoneEftDmaRadar
                 await ConfigureProgramAsync(loadingWindow: loading);
                 MainWindow = new MainWindow();
                 MainWindow.Show();
+                // ✅ Make application DPI-aware
+                if (Environment.OSVersion.Version.Major >= 6)
+                {
+                    SetProcessDPIAware();
+                }
             }
             catch (Exception ex)
             {

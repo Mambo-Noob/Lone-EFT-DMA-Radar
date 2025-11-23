@@ -26,8 +26,11 @@ SOFTWARE.
  *
 */
 
+using LoneEftDmaRadar.DMA;
 using LoneEftDmaRadar.Misc;
 using LoneEftDmaRadar.Misc.Workers;
+using LoneEftDmaRadar.Tarkov.Features.MemWrites;
+using LoneEftDmaRadar.Tarkov.GameWorld.Camera;
 using LoneEftDmaRadar.Tarkov.GameWorld.Exits;
 using LoneEftDmaRadar.Tarkov.GameWorld.Explosives;
 using LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers;
@@ -55,9 +58,11 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
         private readonly RegisteredPlayers _rgtPlayers;
         private readonly ExitManager _exfilManager;
         private readonly ExplosivesManager _explosivesManager;
+        private readonly CameraManager _cameraManager;
         private readonly WorkerThread _t1;
         private readonly WorkerThread _t2;
         private readonly WorkerThread _t3;
+        private readonly WorkerThread _t4;
 
         /// <summary>
         /// Map ID of Current Map.
@@ -70,7 +75,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
         public IReadOnlyCollection<IExitPoint> Exits => _exfilManager;
         public LocalPlayer LocalPlayer => _rgtPlayers?.LocalPlayer;
         public LootManager Loot { get; }
-
+        private readonly MemWritesManager _memWritesManager;
         private LocalGameWorld() { }
 
         /// <summary>
@@ -86,7 +91,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
                 _t1 = new WorkerThread()
                 {
                     Name = "Realtime Worker",
-                    ThreadPriority = ThreadPriority.AboveNormal,
+                    ThreadPriority = ThreadPriority.Highest,
                     SleepDuration = TimeSpan.FromMilliseconds(8),
                     SleepMode = WorkerThreadSleepMode.DynamicSleep
                 };
@@ -111,6 +116,19 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
                 Loot = new(localGameWorld);
                 _exfilManager = new(mapID, _rgtPlayers.LocalPlayer.IsPmc);
                 _explosivesManager = new(localGameWorld);
+                _memWritesManager = new MemWritesManager();
+
+                // Add new worker thread in constructor
+                _t4 = new WorkerThread()
+                {
+                    Name = "MemWrites Worker",
+                    ThreadPriority = ThreadPriority.Normal,
+                    SleepDuration = TimeSpan.FromMilliseconds(100)
+                };
+                _t4.PerformWork += MemWritesWorker_PerformWork;
+
+                // Start in Start() method
+                _t4.Start();      
             }
             catch
             {
@@ -259,20 +277,45 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
         /// </summary>
         private void RealtimeWorker_PerformWork(object sender, WorkerThreadArgs e)
         {
-            var players = _rgtPlayers.Where(x => x.IsActive && x.IsAlive);
-            var localPlayer = LocalPlayer;
-            if (!players.Any()) // No players - Throttle
+            try
             {
-                Thread.Sleep(1);
-                return;
-            }
+                var players = _rgtPlayers.Where(x => x.IsActive && x.IsAlive);
+                var localPlayer = LocalPlayer;
 
-            using var scatter = Memory.CreateScatter(VmmFlags.NOCACHE);
-            foreach (var player in players)
-            {
-                player.OnRealtimeLoop(scatter);
+                if (!players.Any()) // No players - Throttle
+                {
+                    Thread.Sleep(1);
+                    return;
+                }
+
+                using var scatter = Memory.CreateScatter(VmmFlags.NOCACHE);
+
+                // ✅ NEW: Update camera FIRST (same scatter as players!)
+                if (MemDMA.CameraManager != null && localPlayer != null)
+                {
+                    MemDMA.CameraManager.OnRealtimeLoop(scatter, localPlayer);
+                }
+
+                // Update Players
+                foreach (var player in players)
+                {
+                    try
+                    {
+                        player.OnRealtimeLoop(scatter);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"ERROR in OnRealtimeLoop for player '{player.Name}': {ex}");
+                    }
+                }
+
+                // ✅ Execute ONCE - camera + all players in single DMA operation!
+                scatter.Execute();
             }
-            scatter.Execute();
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"CRITICAL ERROR in RealtimeWorker: {ex}");
+            }
         }
 
         #endregion
@@ -287,7 +330,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
         {
             var ct = e.CancellationToken;
             ValidatePlayerTransforms(); // Check for transform anomalies
-            // Sync FilteredLoot
+            // Refresh Loot
             Loot.Refresh(ct);
         }
 
@@ -328,7 +371,30 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
         }
 
         #endregion
-
+        private void MemWritesWorker_PerformWork(object sender, WorkerThreadArgs e)
+        {
+            try
+            {
+                if (!App.Config.MemWrites.Enabled)
+                {
+                    Thread.Sleep(100);
+                    return;
+                }
+        
+                var localPlayer = LocalPlayer;
+                if (localPlayer == null)
+                {
+                    Thread.Sleep(50);
+                    return;
+                }
+        
+                _memWritesManager.Apply(localPlayer);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MemWritesWorker] Error: {ex}");
+            }
+        }
         #region BTR Vehicle
 
         /// <summary>
@@ -360,9 +426,11 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
         {
             if (Interlocked.Exchange(ref _disposed, true) == false)
             {
+                MemDMA.CameraManager = null;
                 _t1?.Dispose();
                 _t2?.Dispose();
-                _t3?.Dispose();
+                _t3?.Dispose();                
+                _t4?.Dispose();  
             }
         }
 

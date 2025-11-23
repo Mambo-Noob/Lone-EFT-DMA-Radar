@@ -26,53 +26,16 @@ SOFTWARE.
  *
 */
 
-using LoneEftDmaRadar.Tarkov.GameWorld.Player;
-using LoneEftDmaRadar.UI.Radar.Maps;
-using LoneEftDmaRadar.UI.Skia;
-using LoneEftDmaRadar.Web.TarkovDev.Data;
-
 namespace LoneEftDmaRadar.Tarkov.GameWorld.Loot
 {
-    public sealed class LootAirdrop : LootItem
+    public sealed class LootAirdrop : LootContainer
     {
-        private static readonly TarkovMarketItem _default = new();
-
         public override string Name { get; } = "Airdrop";
-
-        public LootAirdrop(Vector3 position) : base(_default, position)
+        /// <summary>
+        /// Constructor.
+        /// </summary>
+        public LootAirdrop(Vector3 position) : base(position)
         {
-        }
-
-        public override void Draw(SKCanvas canvas, EftMapParams mapParams, LocalPlayer localPlayer)
-        {
-            var heightDiff = Position.Y - localPlayer.Position.Y;
-            var point = Position.ToMapPos(mapParams.Map).ToZoomedPos(mapParams);
-            MouseoverPosition = new Vector2(point.X, point.Y);
-            SKPaints.ShapeOutline.StrokeWidth = 2f;
-            if (heightDiff > 1.45) // loot is above player
-            {
-                using var path = point.GetUpArrow(4);
-                canvas.DrawPath(path, SKPaints.ShapeOutline);
-                canvas.DrawPath(path, SKPaints.PaintContainerLoot);
-            }
-            else if (heightDiff < -1.45) // loot is below player
-            {
-                using var path = point.GetDownArrow(4);
-                canvas.DrawPath(path, SKPaints.ShapeOutline);
-                canvas.DrawPath(path, SKPaints.PaintContainerLoot);
-            }
-            else // loot is level with player
-            {
-                var size = 4 * App.Config.UI.UIScale;
-                canvas.DrawCircle(point, size, SKPaints.ShapeOutline);
-                canvas.DrawCircle(point, size, SKPaints.PaintContainerLoot);
-            }
-        }
-
-
-        public override void DrawMouseover(SKCanvas canvas, EftMapParams mapParams, LocalPlayer localPlayer)
-        {
-            Position.ToMapPos(mapParams.Map).ToZoomedPos(mapParams).DrawMouseoverText(canvas, Name);
         }
     }
 }

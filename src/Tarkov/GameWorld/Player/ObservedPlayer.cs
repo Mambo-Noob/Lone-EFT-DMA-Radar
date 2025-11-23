@@ -26,6 +26,7 @@ SOFTWARE.
  *
 */
 
+using LoneEftDmaRadar.DMA;
 using LoneEftDmaRadar.Misc.Services;
 using LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers;
 using LoneEftDmaRadar.Tarkov.Mono.Collections;
@@ -47,6 +48,15 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         /// ObservedPlayerController for non-clientplayer players.
         /// </summary>
         private ulong ObservedPlayerController { get; }
+        public override ulong Body { get; }
+        /// <summary>
+        /// Inventory Controller field address.
+        /// </summary>
+        public override ulong InventoryControllerAddr { get; }
+        /// <summary>
+        /// Hands Controller field address.
+        /// </summary>
+        public override ulong HandsControllerAddr { get; }
         /// <summary>
         /// ObservedHealthController for non-clientplayer players.
         /// </summary>
@@ -56,7 +66,11 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         /// </summary>
         public override string Name
         {
-            get => Profile?.Name ?? "Unknown";
+            get
+            {
+                var name = Profile?.Name;
+                return string.IsNullOrWhiteSpace(name) ? "Unknown" : name;
+            }
             set
             {
                 if (Profile is PlayerProfile profile)
@@ -154,93 +168,241 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
 
         internal ObservedPlayer(ulong playerBase) : base(playerBase)
         {
-            var localPlayer = Memory.LocalPlayer;
-            ArgumentNullException.ThrowIfNull(localPlayer, nameof(localPlayer));
-            ObservedPlayerController = Memory.ReadPtr(this + Offsets.ObservedPlayerView.ObservedPlayerController);
-            ArgumentOutOfRangeException.ThrowIfNotEqual(this,
-                Memory.ReadValue<ulong>(ObservedPlayerController + Offsets.ObservedPlayerController.Player),
-                nameof(ObservedPlayerController));
-            ObservedHealthController = Memory.ReadPtr(ObservedPlayerController + Offsets.ObservedPlayerController.HealthController);
-            ArgumentOutOfRangeException.ThrowIfNotEqual(this,
-                Memory.ReadValue<ulong>(ObservedHealthController + Offsets.ObservedHealthController.Player),
-                nameof(ObservedHealthController));
-            CorpseAddr = ObservedHealthController + Offsets.ObservedHealthController.PlayerCorpse;
-
-            MovementContext = GetMovementContext();
-            RotationAddress = ValidateRotationAddr(MovementContext + Offsets.ObservedPlayerStateContext.Rotation);
-            /// Setup Transform
-            var ti = Memory.ReadPtrChain(this, false, _transformInternalChain);
-            SkeletonRoot = new UnityTransform(ti);
-            _ = SkeletonRoot.UpdatePosition();
-
-            bool isAI = Memory.ReadValue<bool>(this + Offsets.ObservedPlayerView.IsAI);
-            IsHuman = !isAI;
-            Profile = new PlayerProfile(this, GetAccountID());
-            // Get Group ID
-            GroupID = isAI ? -1 : GetGroupNumber();
-            /// Determine Player Type
-            PlayerSide = (Enums.EPlayerSide)Memory.ReadValue<int>(this + Offsets.ObservedPlayerView.Side); // Usec,Bear,Scav,etc.
-            if (!Enum.IsDefined(PlayerSide)) // Make sure PlayerSide is valid
-                throw new ArgumentOutOfRangeException(nameof(PlayerSide));
-            if (IsScav)
+            try
             {
-                if (isAI)
+                if (playerBase == 0)
+                    throw new InvalidOperationException("[ObservedPlayer] playerBase is 0 (bad registered/observed list offset)");
+
+                playerBase.ThrowIfInvalidVirtualAddress(nameof(playerBase));
+
+                var localPlayer = Memory.LocalPlayer;
+                ArgumentNullException.ThrowIfNull(localPlayer, nameof(localPlayer));
+
+                // ObservedPlayerController
+                ObservedPlayerController = SafeReadPtr(
+                    this + Offsets.ObservedPlayerView.ObservedPlayerController,
+                    "[ObservedPlayer] ObservedPlayerController");
+
+                // Validate ObservedPlayerController.Player == this
+                try
                 {
-                    var voicePtr = Memory.ReadPtr(this + Offsets.ObservedPlayerView.Voice);
-                    string voice = Memory.ReadUnicodeString(voicePtr);
-                    var role = GetAIRoleInfo(voice);
-                    Name = role.Name;
-                    Type = role.Type;
+                    var controllerPlayer = Memory.ReadValue<ulong>(
+                        ObservedPlayerController + Offsets.ObservedPlayerController.Player);
+                    if (controllerPlayer != this)
+                    {
+                        throw new InvalidOperationException(
+                            $"[ObservedPlayer] ObservedPlayerController.Player mismatch. " +
+                            $"Expected=0x{(ulong)this:X}, Actual=0x{controllerPlayer:X}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[ObservedPlayer] ObservedPlayerController.Player check failed: {ex}");
+                    throw;
+                }
+
+                // ObservedHealthController
+                ObservedHealthController = SafeReadPtr(
+                    ObservedPlayerController + Offsets.ObservedPlayerController.HealthController,
+                    "[ObservedPlayer] ObservedHealthController");
+
+                // Validate ObservedHealthController.Player == this
+                try
+                {
+                    var healthPlayer = Memory.ReadValue<ulong>(
+                        ObservedHealthController + Offsets.ObservedHealthController.Player);
+                    if (healthPlayer != this)
+                    {
+                        throw new InvalidOperationException(
+                            $"[ObservedPlayer] ObservedHealthController.Player mismatch. " +
+                            $"Expected=0x{(ulong)this:X}, Actual=0x{healthPlayer:X}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[ObservedPlayer] ObservedHealthController.Player check failed: {ex}");
+                    throw;
+                }
+
+                // Body / controllers / corpse
+                Body = SafeReadPtr(this + Offsets.ObservedPlayerView.PlayerBody, "[ObservedPlayer] Body");
+
+                InventoryControllerAddr = ObservedPlayerController + Offsets.ObservedPlayerController.InventoryController;
+                HandsControllerAddr     = ObservedPlayerController + Offsets.ObservedPlayerController.HandsController;
+                CorpseAddr              = ObservedHealthController + Offsets.ObservedHealthController.PlayerCorpse;
+
+                // Movement / rotation
+                MovementContext = GetMovementContext();
+                RotationAddress = ValidateRotationAddr(MovementContext + Offsets.ObservedPlayerStateContext.Rotation);
+
+                // Transform (CRITICAL)
+                var ti = SafeReadPtrChain("[ObservedPlayer] TransformInternal", this, _transformInternalChain);
+                SkeletonRoot = new UnityTransform(ti);
+                _ = SkeletonRoot.UpdatePosition();
+
+                // Skeleton (optional)
+                try
+                {
+                    Skeleton = new Skeleton(this, SkeletonRoot.TransformInternal);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"WARNING: Failed to initialize Skeleton for ObservedPlayer (ESP will be unavailable): {ex}");
+                }
+
+                // AI / human flags
+                bool isAI = SafeReadValue<bool>(
+                    this + Offsets.ObservedPlayerView.IsAI,
+                    "[ObservedPlayer] IsAI");
+                IsHuman = !isAI;
+
+                Profile = new PlayerProfile(this, GetAccountID());
+
+                // Group ID
+                GroupID = isAI ? -1 : GetGroupNumber();
+
+                // Side / type / name
+                var sideAddr = this + Offsets.ObservedPlayerView.Side;
+                PlayerSide = (Enums.EPlayerSide)SafeReadValue<int>(sideAddr, "[ObservedPlayer] Side");
+                if (!Enum.IsDefined(typeof(Enums.EPlayerSide), PlayerSide))
+                    throw new InvalidOperationException($"[ObservedPlayer] Invalid PlayerSide value: {PlayerSide}");
+
+                if (IsScav)
+                {
+                    if (isAI)
+                    {
+                        var voicePtr = SafeReadPtr(this + Offsets.ObservedPlayerView.Voice, "[ObservedPlayer] Voice");
+                        string voice = Memory.ReadUnicodeString(voicePtr);
+                        var role = GetAIRoleInfo(voice);
+                        Name = role.Name;
+                        Type = role.Type;
+                    }
+                    else
+                    {
+                        int pscavNumber = Interlocked.Increment(ref _lastPscavNumber);
+                        Name = $"PScav{pscavNumber}";
+                        Type = GroupID != -1 && GroupID == localPlayer.GroupID
+                            ? PlayerType.Teammate
+                            : PlayerType.PScav;
+                    }
+                }
+                else if (IsPmc)
+                {
+                    Name = "PMC";
+                    Type = GroupID != -1 && GroupID == localPlayer.GroupID
+                        ? PlayerType.Teammate
+                        : PlayerType.PMC;
                 }
                 else
                 {
-                    int pscavNumber = Interlocked.Increment(ref _lastPscavNumber);
-                    Name = $"PScav{pscavNumber}";
-                    Type = GroupID != -1 && GroupID == localPlayer.GroupID ?
-                        PlayerType.Teammate : PlayerType.PScav;
+                    throw new NotImplementedException($"[ObservedPlayer] Unsupported PlayerSide: {PlayerSide}");
                 }
-            }
-            else if (IsPmc)
-            {
-                Name = "PMC";
-                Type = GroupID != -1 && GroupID == localPlayer.GroupID ?
-                    PlayerType.Teammate : PlayerType.PMC;
-            }
-            else
-                throw new NotImplementedException(nameof(PlayerSide));
-            if (IsHuman)
-            {
-                long acctIdLong = long.Parse(AccountID);
-                var cache = LocalCache.GetProfileCollection();
-                if (cache.FindById(acctIdLong) is EftProfileDto dto &&
-                    dto.IsCachedRecent)
+
+                // Profile cache only for humans
+                if (IsHuman)
                 {
-                    try
+                    long acctIdLong = long.Parse(AccountID);
+                    var cache = LocalCache.GetProfileCollection();
+                    if (cache.FindById(acctIdLong) is EftProfileDto dto && dto.IsCachedRecent)
                     {
-                        var profileData = dto.ToProfileData();
-                        Profile.Data = profileData;
-                        Debug.WriteLine($"[ObservedPlayer] Got Profile (Cached) '{acctIdLong}'!");
+                        try
+                        {
+                            var profileData = dto.ToProfileData();
+                            Profile.Data = profileData;
+                            Debug.WriteLine($"[ObservedPlayer] Got Profile (Cached) '{acctIdLong}'!");
+                        }
+                        catch
+                        {
+                            _ = cache.Delete(acctIdLong); // Corrupted cache data, remove it
+                            EFTProfileService.RegisterProfile(Profile); // Re-register for lookup
+                        }
                     }
-                    catch
+                    else
                     {
-                        _ = cache.Delete(acctIdLong); // Corrupted cache data, remove it
-                        EFTProfileService.RegisterProfile(Profile); // Re-register for lookup
+                        EFTProfileService.RegisterProfile(Profile);
+                    }
+
+                    PlayerHistoryViewModel.Add(this); // Log to player history
+                }
+
+                // Watchlist
+                if (IsHumanHostile)
+                {
+                    if (MainWindow.Instance?.PlayerWatchlist?.ViewModel is PlayerWatchlistViewModel vm &&
+                        vm.Watchlist.TryGetValue(AccountID, out var watchlistEntry))
+                    {
+                        Type = PlayerType.SpecialPlayer;
+                        UpdateAlerts($"[Watchlist] {watchlistEntry.Reason} @ {watchlistEntry.Timestamp}");
                     }
                 }
-                else
-                {
-                    EFTProfileService.RegisterProfile(Profile);
-                }
-                PlayerHistoryViewModel.Add(this); /// Log To Player History
             }
-            if (IsHumanHostile) /// Special Players Check on Hostiles Only
+            catch (Exception ex)
             {
-                if (MainWindow.Instance?.PlayerWatchlist?.ViewModel is PlayerWatchlistViewModel vm &&
-                    vm.Watchlist.TryGetValue(AccountID, out var watchlistEntry)) // player is on watchlist
+                Debug.WriteLine($"[ObservedPlayer] FAILED to initialize: {ex}");
+                throw;
+            }
+        }
+        private static ulong SafeReadPtr(ulong addr, string fieldName)
+        {
+            if (addr == 0)
+                throw new InvalidOperationException($"{fieldName}: source address is 0x0");
+
+            var value = Memory.ReadPtr(addr, false);
+            if (value == 0)
+                throw new InvalidOperationException($"{fieldName}: read value is 0x0 (bad offset / not initialized)");
+
+            return value;
+        }
+
+        private static T SafeReadValue<T>(ulong addr, string fieldName) where T : unmanaged
+        {
+            if (addr == 0)
+                throw new InvalidOperationException($"{fieldName}: address is 0x0");
+
+            return Memory.ReadValue<T>(addr, false);
+        }
+
+        /// <summary>
+        /// Wrapper for ReadPtrChain that asserts non-zero and logs context.
+        /// </summary>
+        private static ulong SafeReadPtrChain(string fieldName, ulong root, params uint[] chain)
+        {
+            var value = Memory.ReadPtrChain(root, false, chain);
+            if (value == 0)
+                throw new InvalidOperationException($"{fieldName}: ReadPtrChain returned 0 (bad chain / offsets)");
+
+            return value;
+        }
+
+        public override void EnsureSkeletonInitialized()
+        {
+            if (Skeleton != null && SkeletonRoot != null && SkeletonRoot.TransformInternal != 0)
+                return;
+
+            var now = DateTime.UtcNow;
+            if (now < NextSkeletonRetryUtc)
+                return;
+
+            NextSkeletonRetryUtc = now.AddMilliseconds(500);
+
+            try
+            {
+                if (SkeletonRoot == null || SkeletonRoot.TransformInternal == 0)
                 {
-                    Type = PlayerType.SpecialPlayer; // Flag watchlist player
-                    UpdateAlerts($"[Watchlist] {watchlistEntry.Reason} @ {watchlistEntry.Timestamp}");
+                    var ti = SafeReadPtrChain("[ObservedPlayer] TransformInternal(retry)", this, _transformInternalChain);
+                    SkeletonRoot = new UnityTransform(ti);
+                    _ = SkeletonRoot.UpdatePosition();
                 }
+
+                if (Skeleton == null && SkeletonRoot.TransformInternal != 0)
+                {
+                    Skeleton = new Skeleton(this, SkeletonRoot.TransformInternal);
+                    Debug.WriteLine($"[Skeleton] Reinitialized for ObservedPlayer '{Name}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Skeleton] Reinit failed for ObservedPlayer '{Name}': {ex.Message}");
             }
         }
 
@@ -282,18 +444,22 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         }
 
         /// <summary>
-        /// Sync Player Information.
+        /// Refresh Player Information.
         /// </summary>
         public override void OnRegRefresh(VmmScatter scatter, ISet<ulong> registered, bool? isActiveParam = null)
         {
             if (isActiveParam is not bool isActive)
                 isActive = registered.Contains(this);
+
             if (isActive)
             {
                 UpdateHealthStatus();
+                EnsureSkeletonInitialized(); // <── keep skeleton up to date here
             }
+
             base.OnRegRefresh(scatter, registered, isActive);
         }
+
 
         /// <summary>
         /// Get Player's Updated Health Condition
@@ -317,6 +483,21 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
             {
                 Debug.WriteLine($"ERROR updating Health Status for '{Name}': {ex}");
             }
+        }
+
+        /// <summary>
+        /// Get the Transform Internal Chain for this Player.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal override void GetTransformInternalChain(Bones bone, Span<uint> offsets)
+        {
+            ArgumentOutOfRangeException.ThrowIfNotEqual(offsets.Length, AbstractPlayer.TransformInternalChainCount, nameof(offsets));
+            offsets[0] = Offsets.ObservedPlayerView.PlayerBody;
+            offsets[1] = Offsets.PlayerBody.SkeletonRootJoint;
+            offsets[2] = Offsets.DizSkinningSkeleton._values;
+            offsets[3] = MonoList<byte>.ArrOffset;
+            offsets[4] = MonoList<byte>.ArrStartOffset + (uint)bone * 0x8;
+            offsets[5] = 0x10;
         }
 
         private static readonly uint[] _transformInternalChain =

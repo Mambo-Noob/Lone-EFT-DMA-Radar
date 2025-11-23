@@ -34,8 +34,6 @@ namespace LoneEftDmaRadar.UI.Skia
 {
     public sealed class AimviewWidget : AbstractSKWidget
     {
-        // Constants
-        public const float AimviewBaseStrokeSize = 1.33f;
         // Fields
         private Vector3 _forward, _right, _up, _camPos;
         private SKBitmap _bitmap;
@@ -143,7 +141,7 @@ namespace LoneEftDmaRadar.UI.Skia
                     float radius = maxRadius - MathF.Log(distance + 1f) * scaleFactor;
                     radius = Math.Clamp(radius, minRadius, maxRadius);
 
-                    _canvas.DrawCircle(screen, radius, GetPaint(player));
+                    _canvas.DrawCircle(screen.X, screen.Y, radius, GetPaint(player));
                 }
             }
         }
@@ -191,7 +189,7 @@ namespace LoneEftDmaRadar.UI.Skia
         {
             base.SetScaleFactor(newScale);
             // Consolidated strokes
-            float std = AimviewBaseStrokeSize * newScale;
+            float std = 1f * newScale;
             SKPaints.PaintAimviewWidgetCrosshair.StrokeWidth = std;
             SKPaints.PaintAimviewWidgetLocalPlayer.StrokeWidth = std;
             SKPaints.PaintAimviewWidgetPMC.StrokeWidth = std;

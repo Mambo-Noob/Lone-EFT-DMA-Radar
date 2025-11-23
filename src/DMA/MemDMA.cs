@@ -29,11 +29,13 @@ SOFTWARE.
 using Collections.Pooled;
 using LoneEftDmaRadar.Misc;
 using LoneEftDmaRadar.Tarkov.GameWorld;
+using LoneEftDmaRadar.Tarkov.GameWorld.Camera;
 using LoneEftDmaRadar.Tarkov.GameWorld.Exits;
 using LoneEftDmaRadar.Tarkov.GameWorld.Explosives;
 using LoneEftDmaRadar.Tarkov.GameWorld.Loot.Helpers;
 using LoneEftDmaRadar.Tarkov.GameWorld.Player;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
+using LoneEftDmaRadar.UI.Misc;
 using VmmSharpEx;
 using VmmSharpEx.Extensions;
 using VmmSharpEx.Options;
@@ -48,21 +50,25 @@ namespace LoneEftDmaRadar.DMA
     public sealed class MemDMA : IDisposable
     {
         #region Init
-
+        private MakcuAimbot _makcuAimbot;
+        public static MakcuAimbot MakcuAimbot { get; private set; }
         private const string GAME_PROCESS_NAME = "EscapeFromTarkov.exe";
         internal const uint MAX_READ_SIZE = 0x1000u * 1500u;
         private static readonly string _mmap = Path.Combine(App.ConfigPath.FullName, "mmap.txt");
         private readonly Vmm _vmm;
         private readonly InputManager _input;
         private uint _pid;
+        private bool _restartRadar;
 
         public string MapID => Game?.MapID;
         public ulong UnityBase { get; private set; }
+        public uint UnitySize { get; set; }
         public ulong GOM { get; private set; }
         public bool Starting { get; private set; }
         public bool Ready { get; private set; }
         public bool InRaid => Game?.InRaid ?? false;
-
+        public static CameraManager CameraManager { get; internal set; }
+        private static CameraManager _cameraManager;
         #region Restart Radar
 
         private readonly Lock _restartSync = new();
@@ -121,7 +127,7 @@ namespace LoneEftDmaRadar.DMA
                         Debug.WriteLine("[DMA] No MemMap, attempting to generate...");
                         _vmm = new Vmm(args: initArgs)
                         {
-                            EnableMemoryWriting = false
+                            EnableMemoryWriting = true
                         };
                         _ = _vmm.GetMemoryMap(
                             applyMap: true,
@@ -135,7 +141,7 @@ namespace LoneEftDmaRadar.DMA
                 }
                 _vmm ??= new Vmm(args: initArgs)
                 {
-                    EnableMemoryWriting = false
+                    EnableMemoryWriting = true
                 };
                 _vmm.RegisterAutoRefresh(RefreshOption.MemoryPartial, TimeSpan.FromMilliseconds(300));
                 _vmm.RegisterAutoRefresh(RefreshOption.TlbPartial, TimeSpan.FromSeconds(2));
@@ -184,6 +190,7 @@ namespace LoneEftDmaRadar.DMA
             Debug.WriteLine("Memory thread starting...");
             while (MainWindow.Instance is null)
                 Thread.Sleep(1);
+
             while (true)
             {
                 try
@@ -192,6 +199,12 @@ namespace LoneEftDmaRadar.DMA
                     {
                         RunStartupLoop();
                         OnProcessStarted();
+
+                        // Create Makcu aimbot for this MemDMA instance
+                        _makcuAimbot = new MakcuAimbot(this);
+                        MakcuAimbot = _makcuAimbot;   // expose globally
+                        Debug.WriteLine("[MemDMA] MakcuAimbot created");
+
                         RunGameLoop();
                         OnProcessStopped();
                     }
@@ -205,6 +218,7 @@ namespace LoneEftDmaRadar.DMA
             }
         }
 
+
         #endregion
 
         #region Startup / Main Loop
@@ -213,77 +227,159 @@ namespace LoneEftDmaRadar.DMA
         /// Starts up the Game Process and all mandatory modules.
         /// Returns to caller when the Game is ready.
         /// </summary>
-        private void RunStartupLoop()
-        {
-            Debug.WriteLine("New Process Startup");
-            while (true) // Startup loop
-            {
-                try
-                {
-                    _vmm.ForceFullRefresh();
-                    ResourceJanitor.Run();
-                    LoadProcess();
-                    LoadModules();
-                    this.Starting = true;
-                    OnProcessStarting();
-                    this.Ready = true;
-                    Debug.WriteLine("Process Startup [OK]");
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Process Startup [FAIL]: {ex}");
-                    OnProcessStopped();
-                    Thread.Sleep(1000);
-                }
-            }
-        }
+// Add field at top of MemDMA class
+private Thread _cameraThread;
+private volatile bool _cameraThreadRunning;
 
-        /// <summary>
-        /// Main Game Loop Method.
-        /// Returns to caller when Game is no longer running.
-        /// </summary>
-        private void RunGameLoop()
+// In RunStartupLoop, after CameraManager initialization:
+private void RunStartupLoop()
+{
+    Debug.WriteLine("New Process Startup");
+    while (true)
+    {
+        try
         {
-            while (true)
+            _vmm.ForceFullRefresh();
+            ResourceJanitor.Run();
+            LoadProcess();
+            LoadModules();
+            this.Starting = true;
+            OnProcessStarting();
+            try
             {
-                try
+                _cameraManager = new CameraManager();
+                MemDMA.CameraManager = _cameraManager;
+                CameraManager.UpdateViewportRes();
+                Debug.WriteLine("CameraManager initialized successfully!");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ERROR initializing CameraManager: {ex}");
+            }
+            this.Ready = true;
+            Debug.WriteLine("Process Startup [OK]");
+            break;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Process Startup [FAIL]: {ex}");
+            OnProcessStopped();
+            Thread.Sleep(1000);
+        }
+    }
+}
+
+// In RunGameLoop, start camera thread when raid starts:
+private void RunGameLoop()
+{
+    while (true)
+    {
+        try
+        {
+            var ct = Restart;
+            using (var game = Game = LocalGameWorld.CreateGameInstance(ct))
+            {
+                OnRaidStarted();
+                
+                game.Start();
+                while (game.InRaid)
                 {
-                    var ct = Restart;
-                    using (var game = Game = LocalGameWorld.CreateGameInstance(ct))
-                    {
-                        OnRaidStarted();
-                        game.Start();
-                        while (game.InRaid)
-                        {
-                            ct.ThrowIfCancellationRequested();
-                            game.Refresh();
-                            Thread.Sleep(133);
-                        }
-                    }
-                }
-                catch (OperationCanceledException ex) // Restart Radar
-                {
-                    Debug.WriteLine(ex.Message);
-                    continue;
-                }
-                catch (ProcessNotRunningException ex) // Process Closed
-                {
-                    Debug.WriteLine(ex.Message);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Unhandled Exception in Game Loop: {ex}");
-                    break;
-                }
-                finally
-                {
-                    OnRaidStopped();
-                    Thread.Sleep(100);
+                    ct.ThrowIfCancellationRequested();
+                    game.Refresh();
+                    Thread.Sleep(133); // Game loop at 60Hz
                 }
             }
         }
+        catch (OperationCanceledException ex)
+        {
+            Debug.WriteLine(ex.Message);
+            continue;
+        }
+        catch (ProcessNotRunningException ex)
+        {
+            Debug.WriteLine(ex.Message);
+            break;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Unhandled Exception in Game Loop: {ex}");
+            break;
+        }
+        finally
+        {
+            // ✅ REMOVED: StopCameraThread() - no longer needed!
+            
+            OnRaidStopped();
+            Thread.Sleep(100);
+        }
+    }
+}
+
+[DllImport("kernel32.dll")]
+private static extern IntPtr GetCurrentThread();
+
+[DllImport("kernel32.dll")]
+private static extern bool SetThreadPriority(IntPtr hThread, int nPriority);
+
+private const int THREAD_PRIORITY_TIME_CRITICAL = 15;
+
+private void StartCameraThread()
+{
+    _cameraThreadRunning = true;
+    _cameraThread = new Thread(() =>
+    {
+        Debug.WriteLine("[Camera] High-frequency thread started (1000Hz)");
+        
+        // ✅ Set to time-critical priority for immediate scheduling
+        try
+        {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+            Debug.WriteLine("[Camera] Thread priority set to TIME_CRITICAL");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[Camera] Failed to set thread priority: {ex}");
+        }
+        
+        while (_cameraThreadRunning && Ready && InRaid)
+        {
+            try
+            {
+                var lp = LocalPlayer;
+                if (lp != null && _cameraManager != null)
+                {
+                    // ✅ NOCACHE ensures fresh data every time
+                    using var scatter = CreateScatter(VmmFlags.NOCACHE);
+                    _cameraManager.OnRealtimeLoop(scatter, lp);
+                    // Execute() is called inside OnRealtimeLoop now (synchronous)
+                }
+                
+                // ✅ 1ms = 1000Hz update rate
+                Thread.Sleep(1);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[Camera] Update error: {ex.Message}");
+                Thread.Sleep(50);
+            }
+        }
+        
+        Debug.WriteLine("[Camera] High-frequency thread stopped");
+    })
+    {
+        IsBackground = true,
+        Priority = ThreadPriority.Highest, // .NET priority
+        Name = "CameraHighFreqThread"
+    };
+    
+    _cameraThread.Start();
+}
+
+private void StopCameraThread()
+{
+    _cameraThreadRunning = false;
+    _cameraThread = null;
+}
 
         /// <summary>
         /// Raised when the game is stopped.
@@ -292,11 +388,17 @@ namespace LoneEftDmaRadar.DMA
         /// <param name="e"></param>
         private void MemDMA_ProcessStopped(object sender, EventArgs e)
         {
+            _restartRadar = default;
             this.Starting = default;
             this.Ready = default;
             UnityBase = default;
             GOM = default;
             _pid = default;
+            StopCameraThread();
+
+            _makcuAimbot?.Dispose();
+            _makcuAimbot = null;
+            MakcuAimbot = null;    // clear static reference
         }
 
 
@@ -473,8 +575,51 @@ namespace LoneEftDmaRadar.DMA
                 throw new VmmException("Memory Read Failed!");
             return arr;
         }
+        public byte[] ReadBytes(ulong address, uint size, bool useCached)
+        {
+            try
+            {
+                var buffer = new byte[size];
+                // Use instance ReadSpan to fill the buffer
+                ReadSpan(address, buffer, useCached);
+                return buffer;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        private static ulong SafeReadPtr(ulong addr, string fieldName)
+        {
+            if (addr == 0)
+                throw new InvalidOperationException($"{fieldName}: source address is 0x0");
 
+            var value = Memory.ReadPtr(addr, false);
+            if (value == 0)
+                throw new InvalidOperationException($"{fieldName}: read value is 0x0 (bad offset / not initialized)");
 
+            return value;
+        }
+
+        private static T SafeReadValue<T>(ulong addr, string fieldName) where T : unmanaged
+        {
+            if (addr == 0)
+                throw new InvalidOperationException($"{fieldName}: address is 0x0");
+
+            return Memory.ReadValue<T>(addr, false);
+        }
+
+        /// <summary>
+        /// Wrapper for ReadPtrChain that asserts non-zero and logs context.
+        /// </summary>
+        private static ulong SafeReadPtrChain(string fieldName, ulong root, params uint[] chain)
+        {
+            var value = Memory.ReadPtrChain(root, false, chain);
+            if (value == 0)
+                throw new InvalidOperationException($"{fieldName}: ReadPtrChain returned 0 (bad chain / offsets)");
+
+            return value;
+        }
         /// <summary>
         /// Read a chain of pointers and get the final result.
         /// </summary>
@@ -542,7 +687,6 @@ namespace LoneEftDmaRadar.DMA
             }
             return r1;
         }
-
         /// <summary>
         /// Read null terminated UTF8 string.
         /// </summary>
@@ -564,9 +708,133 @@ namespace LoneEftDmaRadar.DMA
             return _vmm.MemReadString(_pid, addr + 0x14, cb, Encoding.Unicode, flags) ??
                 throw new VmmException("Memory Read Failed!");
         }
+        /// <summary>
+        /// Read null terminated string (utf-8/default).
+        /// </summary>
+        /// <param name="length">Number of bytes to read.</param>
+        public string ReadString(ulong addr, int length, bool useCache = true)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(length, (int)0x1000, nameof(length));
+            Span<byte> buffer = stackalloc byte[length];
+            buffer.Clear();
+            ReadSpan(addr, buffer, useCache); // ← CHANGED from ReadBuffer
+            var nullIndex = buffer.IndexOf((byte)0);
+            return nullIndex >= 0
+                ? Encoding.UTF8.GetString(buffer.Slice(0, nullIndex))
+                : Encoding.UTF8.GetString(buffer);
+        }
+
+        /// <summary>
+        /// Read UnityEngineString structure
+        /// </summary>
+        public string ReadUnityString(ulong addr, int length = 64, bool useCache = true)
+        {
+            if (length % 2 != 0)
+                length++;
+            length *= 2; // Unicode 2 bytes per char
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(length, (int)0x1000, nameof(length));
+            Span<byte> buffer = stackalloc byte[length];
+            buffer.Clear();
+            ReadSpan(addr + 0x14, buffer, useCache); // ← CHANGED from ReadBuffer
+            var nullIndex = buffer.FindUtf16NullTerminatorIndex();
+            return nullIndex >= 0
+                ? Encoding.Unicode.GetString(buffer.Slice(0, nullIndex))
+                : Encoding.Unicode.GetString(buffer);
+        }
+        #endregion
+        #region Write Methods
+
+        public void WriteValue<T>(LocalGameWorld game, ulong addr, T value) where T : unmanaged
+        {
+            //if (!game.IsSafeToWriteMem)
+            //    throw new Exception("Not safe to write!");
+            WriteValue(addr, value);
+        }
+
+        public void WriteValue<T>(ulong addr, T value) where T : unmanaged
+        {
+            if (!_vmm.MemWriteValue(_pid, addr, value))
+                throw new VmmException("Memory Write Failed!");
+        }
+        public unsafe void WriteValueEnsure<T>(ulong addr, T value)
+            where T : unmanaged
+        {
+            int cb = sizeof(T);
+            try
+            {
+                var b1 = new ReadOnlySpan<byte>(&value, cb);
+                const int retryCount = 3;
+                for (int i = 0; i < retryCount; i++)
+                {
+                    try
+                    {
+                        WriteValue(addr, value);
+                        Thread.SpinWait(5);
+                        T temp = ReadValue<T>(addr, false);
+                        var b2 = new ReadOnlySpan<byte>(&temp, cb);
+                        if (b1.SequenceEqual(b2))
+                        {
+                            return; // SUCCESS
+                        }
+                    }
+                    catch { }
+                }
+                throw new VmmException("Memory Write Failed!");
+            }
+            catch (VmmException)
+            {
+                throw;
+            }
+        }
+        public unsafe void WriteBuffer<T>(ulong addr, Span<T> buffer)
+            where T : unmanaged
+        {
+            //if (!MemWrites.Enabled)
+            //    throw new Exception("Memory Writing is Disabled!");
+            try
+            {
+                if (!_vmm.MemWriteSpan(_pid, addr, buffer))
+                    throw new VmmException("Memory Write Failed!");
+            }
+            catch (VmmException)
+            {
+                throw;
+            }
+        }
+
+        public void WriteBufferEnsure<T>(ulong addr, Span<T> buffer)
+            where T : unmanaged
+        {
+            int cb = SizeChecker<T>.Size * buffer.Length;
+            try
+            {
+                Span<byte> temp = cb > 0x1000 ? new byte[cb] : stackalloc byte[cb];
+                ReadOnlySpan<byte> b1 = MemoryMarshal.Cast<T, byte>(buffer);
+                const int retryCount = 3;
+                for (int i = 0; i < retryCount; i++)
+                {
+                    try
+                    {
+                        WriteBuffer(addr, buffer);
+                        Thread.SpinWait(5);
+                        temp.Clear();
+                        ReadSpan(addr, temp, false);
+                        if (temp.SequenceEqual(b1))
+                        {
+                            return; // SUCCESS
+                        }
+                    }
+                    catch { }
+                }
+                throw new VmmException("Memory Write Failed!");
+            }
+            catch (VmmException)
+            {
+                throw;
+            }
+        }
 
         #endregion
-
         #region Misc
 
         /// <summary>
@@ -585,7 +853,7 @@ namespace LoneEftDmaRadar.DMA
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public VmmScatter CreateScatter(VmmFlags flags = VmmFlags.NONE) =>
             _vmm.CreateScatter(_pid, flags);
-
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ulong FindSignature(string signature)
         {
@@ -598,7 +866,7 @@ namespace LoneEftDmaRadar.DMA
         /// <summary>
         /// Throws a special exception if no longer in game.
         /// </summary>
-        /// <exception cref="ProcessNotRunningException"></exception>
+        /// <exception cref="OperationCanceledException"></exception>
         public void ThrowIfProcessNotRunning()
         {
             _vmm.ForceFullRefresh();

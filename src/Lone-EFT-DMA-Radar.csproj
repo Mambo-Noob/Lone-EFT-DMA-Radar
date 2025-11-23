@@ -67,6 +67,8 @@
 		<PackageReference Include="SkiaSharp.Views.WPF" Version="3.119.1" />
 		<PackageReference Include="Svg.Skia" Version="3.2.1" />
 		<PackageReference Include="Extended.Wpf.Toolkit" Version="5.0.0" />
+		<PackageReference Include="System.IO.Ports" Version="10.0.0" />
+		<PackageReference Include="System.Management" Version="10.0.0" />
 		<PackageReference Include="TwitchLib.Api" Version="3.10.2" />
 		<PackageReference Include="Velopack" Version="0.0.1298" />
 		<PackageReference Include="VmmSharpEx" Version="3.100.1" />

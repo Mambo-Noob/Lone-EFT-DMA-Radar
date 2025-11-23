@@ -36,6 +36,11 @@ namespace LoneEftDmaRadar.Web.TarkovDev.Data
 {
     internal static class TarkovDevGraphQLApi
     {
+        private static readonly JsonSerializerOptions _jsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
         internal static void Configure(IServiceCollection services)
         {
             services.AddHttpClient(nameof(TarkovDevGraphQLApi), client =>
@@ -70,26 +75,13 @@ namespace LoneEftDmaRadar.Web.TarkovDev.Data
             });
         }
 
-        public static async Task<string> GetTarkovDataAsync()
+        public static async Task<TarkovDevDataQuery> GetTarkovDataAsync()
         {
             var query = new Dictionary<string, string>
             {
                 { "query",
                 """
                 {
-                    maps {
-                        name
-                        nameId
-                        extracts {
-                            name
-                            faction
-                            position {x,y,z}
-                        }
-                        transits {
-                            description
-                            position {x,y,z}
-                        }
-                    }
                     items { 
                         id 
                         name 
@@ -111,10 +103,158 @@ namespace LoneEftDmaRadar.Web.TarkovDev.Data
                             name 
                         } 
                     }
+                    questItems { 
+                        id shortName 
+                    }
                     lootContainers { 
                         id 
                         normalizedName 
                         name 
+                    }
+                    tasks {
+                        id
+                        name
+                        objectives {
+                            id
+                            type
+                            description
+                            maps {
+                                id
+                                name
+                                normalizedName
+                            }
+                            ... on TaskObjectiveItem {
+                                item {
+                                id
+                                name
+                                shortName
+                                }
+                                zones {
+                                id
+                                map {
+                                    id
+                                    normalizedName
+                                    name
+                                }
+                                position {
+                                    y
+                                    x
+                                    z
+                                }
+                                }
+                                requiredKeys {
+                                id
+                                name
+                                shortName
+                                }
+                                count
+                                foundInRaid
+                            }
+                            ... on TaskObjectiveMark {
+                                id
+                                description
+                                markerItem {
+                                id
+                                name
+                                shortName
+                                }
+                                maps {
+                                id
+                                normalizedName
+                                name
+                                }
+                                zones {
+                                id
+                                map {
+                                    id
+                                    normalizedName
+                                    name
+                                }
+                                position {
+                                    y
+                                    x
+                                    z
+                                }
+                                }
+                                requiredKeys {
+                                id
+                                name
+                                shortName
+                                }
+                            }
+                            ... on TaskObjectiveQuestItem {
+                                id
+                                description
+                                requiredKeys {
+                                id
+                                name
+                                shortName
+                                }
+                                maps {
+                                id
+                                normalizedName
+                                name
+                                }
+                                zones {
+                                id
+                                map {
+                                    id
+                                    normalizedName
+                                    name
+                                }
+                                position {
+                                    y
+                                    x
+                                    z
+                                }
+                                }
+                                requiredKeys {
+                                id
+                                name
+                                shortName
+                                }
+                                questItem {
+                                    id
+                                    name
+                                    shortName
+                                    normalizedName
+                                    description
+                                }
+                                count
+                            }
+                            ... on TaskObjectiveBasic {
+                                id
+                                description
+                                requiredKeys {
+                                id
+                                name
+                                shortName
+                                }
+                                maps {
+                                id
+                                normalizedName
+                                name
+                                }
+                                zones {
+                                id
+                                map {
+                                    id
+                                    normalizedName
+                                    name
+                                }
+                                position {
+                                    y
+                                    x
+                                    z
+                                }
+                                }
+                                requiredKeys {
+                                id
+                                name
+                                shortName
+                                }
+                            }
+                        }
                     }
                 }
                 """
@@ -125,7 +265,7 @@ namespace LoneEftDmaRadar.Web.TarkovDev.Data
                 requestUri: "https://api.tarkov.dev/graphql",
                 value: query);
             response.EnsureSuccessStatusCode();
-            return await response.Content.ReadAsStringAsync();
+            return await JsonSerializer.DeserializeAsync<TarkovDevDataQuery>(await response.Content.ReadAsStreamAsync(), _jsonOptions);
         }
     }
 }

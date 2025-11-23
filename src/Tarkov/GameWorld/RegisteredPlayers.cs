@@ -111,6 +111,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld
             foreach (var player in allPlayers)
             {
                 player.OnRegRefresh(scatter, registered);
+                player.EnsureSkeletonInitialized();
             }
             scatter.Execute();
         }
