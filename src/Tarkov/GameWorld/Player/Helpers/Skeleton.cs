@@ -1,30 +1,8 @@
 ﻿/*
  * Lone EFT DMA Radar
  * Brought to you by Lone (Lone DMA)
- * 
-MIT License
-
-Copyright (c) 2025 Lone DMA
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
- *
-*/
+ * MIT License - Copyright (c) 2025 Lone DMA
+ */
 
 using LoneEftDmaRadar.Tarkov.GameWorld.Camera;
 using LoneEftDmaRadar.Tarkov.Unity.Structures;
@@ -53,6 +31,9 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers
         private readonly Dictionary<Bones, UnityTransform> _bones;
         private readonly AbstractPlayer _player;
         private TrsX[] _cachedVertices; // Shared vertices buffer for all bones
+        private bool _verticesCachedAtLeastOnce; // Track if we've cached valid data
+        private int _consecutiveFailures; // Track consecutive ESP draw failures
+        private const int MAX_FAILURES_BEFORE_RESET = 10; // Reset after this many failures
 
         /// <summary>
         /// Skeleton Root Transform.
@@ -63,6 +44,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers
         /// All Transforms for this Skeleton (including Root).
         /// </summary>
         public IReadOnlyDictionary<Bones, UnityTransform> BoneTransforms => _bones;
+        
         /// <summary>
         /// Maximum bone index across all bones in skeleton
         /// </summary>
@@ -71,9 +53,15 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers
             get
             {
                 if (_bones.Count == 0) return 0;
-                return _bones.Values.Max(b => b.Count - 1); // Count - 1 because Count is length, we want max index
+                return _bones.Values.Max(b => b.Count - 1);
             }
         }
+
+        /// <summary>
+        /// Indicates if skeleton has been properly initialized with valid vertex data
+        /// </summary>
+        public bool IsInitialized => _verticesCachedAtLeastOnce && ValidateCachedVertices();
+
         public Skeleton(AbstractPlayer player, ulong transformInternal)
         {
             _player = player;
@@ -115,12 +103,57 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers
             }
 
             _bones = bones;
+            _verticesCachedAtLeastOnce = false;
+            _consecutiveFailures = 0;
         }
 
         /// <summary>
-        /// Reset the Transform for this player.
+        /// Reset the entire skeleton if it appears corrupted or invalid
         /// </summary>
-        /// <param name="bone"></param>
+        public void ResetSkeleton()
+        {
+            try
+            {
+                //Debug.WriteLine($"[Skeleton] Resetting entire skeleton for player '{_player.Name}'");
+                
+                // Clear cached vertices
+                _cachedVertices = null;
+                _verticesCachedAtLeastOnce = false;
+                _consecutiveFailures = 0;
+
+                // Reset all bone transforms
+                Span<uint> tiOffsets = stackalloc uint[AbstractPlayer.TransformInternalChainCount];
+                
+                // Reset root first
+                Root = new UnityTransform(Root.TransformInternal);
+                _bones[Unity.Structures.Bones.HumanBase] = Root;
+                
+                // Reset all other bones
+                foreach (var bone in AllSkeletonBones.Span)
+                {
+                    try
+                    {
+                        _player.GetTransformInternalChain(bone, tiOffsets);
+                        var tiBone = Memory.ReadPtrChain(_player.Base, true, tiOffsets);
+                        _bones[bone] = new UnityTransform(tiBone);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"ERROR resetting bone {bone} for player '{_player.Name}': {ex}");
+                    }
+                }
+                
+                //Debug.WriteLine($"[Skeleton] Reset complete for player '{_player.Name}'");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ERROR in ResetSkeleton for player '{_player.Name}': {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Reset a specific Transform for this player.
+        /// </summary>
         public void ResetTransform(Bones bone)
         {
             try
@@ -139,182 +172,291 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers
         }
 
         /// <summary>
-        /// Cache the shared vertices buffer (all bones in skeleton use the same buffer)
+        /// Validate that cached vertices contain reasonable data
         /// </summary>
-        public void CacheVertices(ReadOnlySpan<TrsX> vertices)
+        private bool ValidateCachedVertices()
         {
-            if (_cachedVertices == null || _cachedVertices.Length != vertices.Length)
+            if (_cachedVertices == null || _cachedVertices.Length == 0)
+                return false;
+
+            // Sample a few vertices to check for validity
+            for (int i = 0; i < Math.Min(5, _cachedVertices.Length); i++)
             {
-                _cachedVertices = new TrsX[vertices.Length];
+                var vertex = _cachedVertices[i];
+                var pos = vertex.t; // Use 't' field for translation/position
+                
+                // Check for NaN/Infinity
+                if (float.IsNaN(pos.X) || float.IsNaN(pos.Y) || float.IsNaN(pos.Z) ||
+                    float.IsInfinity(pos.X) || float.IsInfinity(pos.Y) || float.IsInfinity(pos.Z))
+                {
+                    return false; // Don't log every check, just return false
+                }
+                
+                // Check for unreasonable world coordinates (way outside normal game bounds)
+                if (Math.Abs(pos.X) > 10000 || Math.Abs(pos.Y) > 10000 || Math.Abs(pos.Z) > 10000)
+                {
+                    return false;
+                }
             }
             
-            vertices.CopyTo(_cachedVertices);
+            return true;
         }
 
         /// <summary>
-        /// Updates the static ESP Widget Buffer with the current Skeleton Bone Screen Coordinates.<br />
-        /// See <see cref="Skeleton._espWidgetBuffer"/><br />
-        /// NOT THREAD SAFE!
+        /// Cache the shared vertices buffer (all bones in skeleton use the same buffer)
+        /// Validates the data before caching
         /// </summary>
-        /// <param name="scaleX">X Scale Factor.</param>
-        /// <param name="scaleY">Y Scale Factor.</param>
-        /// <returns>True if successful, otherwise False.</returns>
-public bool UpdateESPWidgetBuffer(float scaleX, float scaleY, out SKPoint[] buffer)
-{
-    buffer = default;
-    
-    // ✅ FIX: Check if vertices have been cached yet
-    if (_cachedVertices == null || _cachedVertices.Length == 0)
-    {
-        // Silently fail - this is normal on first few frames
-        return false;
-    }
-    
-    try
-    {
-        // Check if all required bones exist
-        if (!_bones.ContainsKey(Unity.Structures.Bones.HumanSpine2) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanHead) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanNeck) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanLCollarbone) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanRCollarbone) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanLPalm) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanRPalm) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanSpine3) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanSpine1) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanPelvis) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanLFoot) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanRFoot) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanLThigh2) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanRThigh2) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanLForearm2) ||
-            !_bones.ContainsKey(Unity.Structures.Bones.HumanRForearm2))
+        public bool CacheVertices(ReadOnlySpan<TrsX> vertices)
         {
-            return false;
+            if (vertices.Length == 0)
+            {
+                return false;
+            }
+
+            // Validate vertex data before caching
+            bool hasValidData = false;
+            for (int i = 0; i < Math.Min(5, vertices.Length); i++)
+            {
+                var pos = vertices[i].t; // Use 't' field for translation/position
+                if (!float.IsNaN(pos.X) && !float.IsNaN(pos.Y) && !float.IsNaN(pos.Z) &&
+                    !float.IsInfinity(pos.X) && !float.IsInfinity(pos.Y) && !float.IsInfinity(pos.Z) &&
+                    Math.Abs(pos.X) < 10000 && Math.Abs(pos.Y) < 10000 && Math.Abs(pos.Z) < 10000)
+                {
+                    hasValidData = true;
+                    break;
+                }
+            }
+
+            if (!hasValidData)
+            {
+                return false; // Invalid data, don't cache
+            }
+
+            // Allocate or resize buffer if needed
+            if (_cachedVertices == null || _cachedVertices.Length != vertices.Length)
+            {
+                _cachedVertices = new TrsX[vertices.Length];
+                //Debug.WriteLine($"[Skeleton] Allocated vertex cache ({vertices.Length} vertices) for '{_player.Name}'");
+            }
+            
+            vertices.CopyTo(_cachedVertices);
+            
+            if (!_verticesCachedAtLeastOnce)
+            {
+                _verticesCachedAtLeastOnce = true;
+                //Debug.WriteLine($"[Skeleton] First valid vertex cache for '{_player.Name}'");
+            }
+            
+            return true;
         }
 
-        // Update each bone's position using the shared cached vertices buffer
-        foreach (var kvp in _bones.Values)
+        /// <summary>
+        /// Updates the static ESP Widget Buffer with the current Skeleton Bone Screen Coordinates.
+        /// Includes validation and auto-reset on persistent failures.
+        /// </summary>
+        public bool UpdateESPWidgetBuffer(float scaleX, float scaleY, out SKPoint[] buffer)
         {
+            buffer = default;
+            
+            // Check if skeleton is initialized with valid data
+            if (!IsInitialized)
+            {
+                // Silently fail - this is normal during early game load
+                return false;
+            }
+            
             try
             {
-                // ✅ FIX: Validate bone index before accessing cached vertices
-                if (kvp.Count > _cachedVertices.Length)
+                // Verify all required bones exist
+                var requiredBones = new[]
                 {
-                    Debug.WriteLine($"ERROR: Bone index {kvp.Count} exceeds cached vertices length {_cachedVertices.Length} for '{_player.Name}'");
+                    Unity.Structures.Bones.HumanSpine2,
+                    Unity.Structures.Bones.HumanHead,
+                    Unity.Structures.Bones.HumanNeck,
+                    Unity.Structures.Bones.HumanLCollarbone,
+                    Unity.Structures.Bones.HumanRCollarbone,
+                    Unity.Structures.Bones.HumanLPalm,
+                    Unity.Structures.Bones.HumanRPalm,
+                    Unity.Structures.Bones.HumanSpine3,
+                    Unity.Structures.Bones.HumanSpine1,
+                    Unity.Structures.Bones.HumanPelvis,
+                    Unity.Structures.Bones.HumanLFoot,
+                    Unity.Structures.Bones.HumanRFoot,
+                    Unity.Structures.Bones.HumanLThigh2,
+                    Unity.Structures.Bones.HumanRThigh2,
+                    Unity.Structures.Bones.HumanLForearm2,
+                    Unity.Structures.Bones.HumanRForearm2
+                };
+
+                foreach (var bone in requiredBones)
+                {
+                    if (!_bones.ContainsKey(bone))
+                    {
+                        return false;
+                    }
+                }
+
+                // Update each bone's position using the shared cached vertices buffer
+                foreach (var kvp in _bones.Values)
+                {
+                    try
+                    {
+                        // Validate bone index before accessing cached vertices
+                        if (kvp.Count > _cachedVertices.Length)
+                        {
+                            _consecutiveFailures++;
+                            CheckAndResetIfNeeded();
+                            return false;
+                        }
+                        
+                        // Update position with cached vertices
+                        // UpdatePosition returns ref Vector3, so we just call it
+                        _ = kvp.UpdatePosition(_cachedVertices);
+                        
+                        // Validate the resulting position
+                        var pos = kvp.Position;
+                        if (float.IsNaN(pos.X) || float.IsNaN(pos.Y) || float.IsNaN(pos.Z) ||
+                            float.IsInfinity(pos.X) || float.IsInfinity(pos.Y) || float.IsInfinity(pos.Z))
+                        {
+                            _consecutiveFailures++;
+                            CheckAndResetIfNeeded();
+                            return false;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        //Debug.WriteLine($"[Skeleton] ERROR updating bone position for '{_player.Name}': {ex}");
+                        _consecutiveFailures++;
+                        CheckAndResetIfNeeded();
+                        return false;
+                    }
+                }
+
+                // Get bone positions for WorldToScreen
+                ref readonly var spine2Pos = ref _bones[Unity.Structures.Bones.HumanSpine2].Position;
+                ref readonly var headPos = ref _bones[Unity.Structures.Bones.HumanHead].Position;
+                ref readonly var neckPos = ref _bones[Unity.Structures.Bones.HumanNeck].Position;
+                ref readonly var leftCollarPos = ref _bones[Unity.Structures.Bones.HumanLCollarbone].Position;
+                ref readonly var rightCollarPos = ref _bones[Unity.Structures.Bones.HumanRCollarbone].Position;
+                ref readonly var leftHandPos = ref _bones[Unity.Structures.Bones.HumanLPalm].Position;
+                ref readonly var rightHandPos = ref _bones[Unity.Structures.Bones.HumanRPalm].Position;
+                ref readonly var upperTorsoPos = ref _bones[Unity.Structures.Bones.HumanSpine3].Position;
+                ref readonly var lowerTorsoPos = ref _bones[Unity.Structures.Bones.HumanSpine1].Position;
+                ref readonly var pelvisPos = ref _bones[Unity.Structures.Bones.HumanPelvis].Position;
+                ref readonly var leftFootPos = ref _bones[Unity.Structures.Bones.HumanLFoot].Position;
+                ref readonly var rightFootPos = ref _bones[Unity.Structures.Bones.HumanRFoot].Position;
+                ref readonly var leftKneePos = ref _bones[Unity.Structures.Bones.HumanLThigh2].Position;
+                ref readonly var rightKneePos = ref _bones[Unity.Structures.Bones.HumanRThigh2].Position;
+                ref readonly var leftElbowPos = ref _bones[Unity.Structures.Bones.HumanLForearm2].Position;
+                ref readonly var rightElbowPos = ref _bones[Unity.Structures.Bones.HumanRForearm2].Position;
+
+                // WorldToScreen all bones
+                if (!CameraManager.WorldToScreen(in spine2Pos, out var midTorsoScreen, true, true))
+                {
+                    _consecutiveFailures++;
+                    CheckAndResetIfNeeded();
                     return false;
                 }
+                if (!CameraManager.WorldToScreen(in headPos, out var headScreen))
+                {
+                    _consecutiveFailures++;
+                    CheckAndResetIfNeeded();
+                    return false;
+                }
+                if (!CameraManager.WorldToScreen(in neckPos, out var neckScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in leftCollarPos, out var leftCollarScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in rightCollarPos, out var rightCollarScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in leftHandPos, out var leftHandScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in rightHandPos, out var rightHandScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in upperTorsoPos, out var upperTorsoScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in lowerTorsoPos, out var lowerTorsoScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in pelvisPos, out var pelvisScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in leftFootPos, out var leftFootScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in rightFootPos, out var rightFootScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in leftKneePos, out var leftKneeScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in rightKneePos, out var rightKneeScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in leftElbowPos, out var leftElbowScreen))
+                    return false;
+                if (!CameraManager.WorldToScreen(in rightElbowPos, out var rightElbowScreen))
+                    return false;
                 
-                // All bones use the SAME vertices buffer with their own index
-                _ = kvp.UpdatePosition(_cachedVertices);
+                // Build line buffer
+                int index = 0;
+                // Head to left foot
+                ScaleAimviewPoint(headScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(neckScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(neckScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(upperTorsoScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(upperTorsoScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(midTorsoScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(midTorsoScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(lowerTorsoScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(lowerTorsoScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(pelvisScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(pelvisScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(leftKneeScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(leftKneeScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(leftFootScreen, ref _espWidgetBuffer[index++]);
+                // Pelvis to right foot
+                ScaleAimviewPoint(pelvisScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(rightKneeScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(rightKneeScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(rightFootScreen, ref _espWidgetBuffer[index++]);
+                // Left collar to left hand
+                ScaleAimviewPoint(leftCollarScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(leftElbowScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(leftElbowScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(leftHandScreen, ref _espWidgetBuffer[index++]);
+                // Right collar to right hand
+                ScaleAimviewPoint(rightCollarScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(rightElbowScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(rightElbowScreen, ref _espWidgetBuffer[index++]);
+                ScaleAimviewPoint(rightHandScreen, ref _espWidgetBuffer[index++]);
+                
+                buffer = _espWidgetBuffer;
+                
+                // Reset failure counter on success
+                _consecutiveFailures = 0;
+                return true;
+
+                void ScaleAimviewPoint(SKPoint original, ref SKPoint result)
+                {
+                    result.X = original.X * scaleX;
+                    result.Y = original.Y * scaleY;
+                }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ERROR updating bone position for '{_player.Name}': {ex}");
+                //Debug.WriteLine($"[Skeleton] ERROR updating ESP widget buffer for player '{_player.Name}': {ex}");
+                _consecutiveFailures++;
+                CheckAndResetIfNeeded();
                 return false;
             }
         }
 
-        // Get bone positions for WorldToScreen
-        ref readonly var spine2Pos = ref _bones[Unity.Structures.Bones.HumanSpine2].Position;
-        ref readonly var headPos = ref _bones[Unity.Structures.Bones.HumanHead].Position;
-        ref readonly var neckPos = ref _bones[Unity.Structures.Bones.HumanNeck].Position;
-        ref readonly var leftCollarPos = ref _bones[Unity.Structures.Bones.HumanLCollarbone].Position;
-        ref readonly var rightCollarPos = ref _bones[Unity.Structures.Bones.HumanRCollarbone].Position;
-        ref readonly var leftHandPos = ref _bones[Unity.Structures.Bones.HumanLPalm].Position;
-        ref readonly var rightHandPos = ref _bones[Unity.Structures.Bones.HumanRPalm].Position;
-        ref readonly var upperTorsoPos = ref _bones[Unity.Structures.Bones.HumanSpine3].Position;
-        ref readonly var lowerTorsoPos = ref _bones[Unity.Structures.Bones.HumanSpine1].Position;
-        ref readonly var pelvisPos = ref _bones[Unity.Structures.Bones.HumanPelvis].Position;
-        ref readonly var leftFootPos = ref _bones[Unity.Structures.Bones.HumanLFoot].Position;
-        ref readonly var rightFootPos = ref _bones[Unity.Structures.Bones.HumanRFoot].Position;
-        ref readonly var leftKneePos = ref _bones[Unity.Structures.Bones.HumanLThigh2].Position;
-        ref readonly var rightKneePos = ref _bones[Unity.Structures.Bones.HumanRThigh2].Position;
-        ref readonly var leftElbowPos = ref _bones[Unity.Structures.Bones.HumanLForearm2].Position;
-        ref readonly var rightElbowPos = ref _bones[Unity.Structures.Bones.HumanRForearm2].Position;
-
-        // WorldToScreen all bones
-        if (!CameraManager.WorldToScreen(in spine2Pos, out var midTorsoScreen, true, true))
-            return false;
-        if (!CameraManager.WorldToScreen(in headPos, out var headScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in neckPos, out var neckScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in leftCollarPos, out var leftCollarScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in rightCollarPos, out var rightCollarScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in leftHandPos, out var leftHandScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in rightHandPos, out var rightHandScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in upperTorsoPos, out var upperTorsoScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in lowerTorsoPos, out var lowerTorsoScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in pelvisPos, out var pelvisScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in leftFootPos, out var leftFootScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in rightFootPos, out var rightFootScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in leftKneePos, out var leftKneeScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in rightKneePos, out var rightKneeScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in leftElbowPos, out var leftElbowScreen))
-            return false;
-        if (!CameraManager.WorldToScreen(in rightElbowPos, out var rightElbowScreen))
-            return false;
-        
-        // Build line buffer
-        int index = 0;
-        // Head to left foot
-        ScaleAimviewPoint(headScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(neckScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(neckScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(upperTorsoScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(upperTorsoScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(midTorsoScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(midTorsoScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(lowerTorsoScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(lowerTorsoScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(pelvisScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(pelvisScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(leftKneeScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(leftKneeScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(leftFootScreen, ref _espWidgetBuffer[index++]);
-        // Pelvis to right foot
-        ScaleAimviewPoint(pelvisScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(rightKneeScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(rightKneeScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(rightFootScreen, ref _espWidgetBuffer[index++]);
-        // Left collar to left hand
-        ScaleAimviewPoint(leftCollarScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(leftElbowScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(leftElbowScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(leftHandScreen, ref _espWidgetBuffer[index++]);
-        // Right collar to right hand
-        ScaleAimviewPoint(rightCollarScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(rightElbowScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(rightElbowScreen, ref _espWidgetBuffer[index++]);
-        ScaleAimviewPoint(rightHandScreen, ref _espWidgetBuffer[index++]);
-        
-        buffer = _espWidgetBuffer;
-        return true;
-
-        void ScaleAimviewPoint(SKPoint original, ref SKPoint result)
+        /// <summary>
+        /// Check if we need to reset the skeleton due to persistent failures
+        /// </summary>
+        private void CheckAndResetIfNeeded()
         {
-            result.X = original.X * scaleX;
-            result.Y = original.Y * scaleY;
+            if (_consecutiveFailures >= MAX_FAILURES_BEFORE_RESET)
+            {
+                //Debug.WriteLine($"[Skeleton] {_consecutiveFailures} consecutive failures for '{_player.Name}', triggering reset");
+                ResetSkeleton();
+            }
         }
-    }
-    catch (Exception ex)
-    {
-        Debug.WriteLine($"ERROR updating ESP widget buffer for player '{_player.Name}': {ex}");
-        return false;
-    }
-}
 
         /// <summary>
         /// All Skeleton Bones for ESP Drawing.

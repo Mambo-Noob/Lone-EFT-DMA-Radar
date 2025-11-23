@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
+using LoneEftDmaRadar.DMA;
 using LoneEftDmaRadar.Tarkov.GameWorld.Camera;
 using LoneEftDmaRadar.Tarkov.GameWorld.Player;
 using LoneEftDmaRadar.Tarkov.GameWorld.Player.Helpers;
@@ -42,6 +43,18 @@ namespace LoneEftDmaRadar.UI.Skia
             if (_LocalPlayer is not LocalPlayer localPlayer)
                 return;
 
+            // ? Check if camera manager is initialized with valid matrices
+            var cameraManager = MemDMA.CameraManager;
+            if (cameraManager == null || !cameraManager.IsInitialized)
+            {
+                // Only log occasionally to avoid spam
+                if (DateTime.UtcNow.Second % 5 == 0)
+                {
+                    Debug.WriteLine("[ESP] Waiting for camera initialization...");
+                }
+                return;
+            }
+
             try
             {
                 DrawPlayers(canvas, localPlayer);
@@ -52,136 +65,163 @@ namespace LoneEftDmaRadar.UI.Skia
             }
         }
 
-private void DrawPlayers(SKCanvas canvas, LocalPlayer localPlayer)
-{
-    var players = AllPlayers?
-        .Where(p => p.IsActive && p.IsAlive && p != localPlayer)
-        .ToList();
-
-    if (players == null || players.Count == 0)
-        return;
-
-    int skeletonsDrawn = 0;
-
-    foreach (var player in players)
-    {
-        try
+        private void DrawPlayers(SKCanvas canvas, LocalPlayer localPlayer)
         {
-            if (DrawPlayer(canvas, player, localPlayer))
+            var players = AllPlayers?
+                .Where(p => p.IsActive && p.IsAlive && p != localPlayer)
+                .ToList();
+
+            if (players == null || players.Count == 0)
+                return;
+
+            int skeletonsDrawn = 0;
+            int skeletonsAttempted = 0;
+            int skeletonsNotInitialized = 0;
+
+            foreach (var player in players)
             {
-                skeletonsDrawn++;
+                try
+                {
+                    skeletonsAttempted++;
+                    
+                    // Check if skeleton exists
+                    if (player.Skeleton == null)
+                    {
+                        continue; // Skip if no skeleton allocated
+                    }
+                    
+                    // Check if skeleton is initialized with valid data
+                    if (!player.Skeleton.IsInitialized)
+                    {
+                        skeletonsNotInitialized++;
+                        continue; // Skip if not yet initialized with valid vertex data
+                    }
+
+                    if (DrawPlayer(canvas, player, localPlayer))
+                    {
+                        skeletonsDrawn++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Error drawing player '{player.Name}': {ex}");
+                }
+            }
+
+            // Provide diagnostic information
+            if (skeletonsAttempted > 0 && skeletonsDrawn == 0)
+            {
+                if (skeletonsNotInitialized == skeletonsAttempted)
+                {
+                    // All skeletons are waiting for valid vertex data
+                    // This is normal during early game load - don't spam logs
+                    if (DateTime.UtcNow.Second % 5 == 0) // Log every 5 seconds
+                    {
+                        Debug.WriteLine($"[ESP] {skeletonsAttempted} players in raid but skeletons not yet initialized with valid vertex data.");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"[ESP] {skeletonsAttempted} players attempted, {skeletonsNotInitialized} not initialized, 0 drawn.");
+                }
             }
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Error drawing player '{player.Name}': {ex}");
-        }
-    }
-
-    if (skeletonsDrawn == 0)
-    {
-        Debug.WriteLine($"[ESP] {players.Count} players in raid but 0 skeletons drawn.");
-    }
-}
-
 
         /// <summary>
         /// Draw a single player. Returns true if something was actually drawn.
         /// </summary>
-/// <summary>
-/// Draw a single player. Returns true if something was actually drawn.
-/// </summary>
-private bool DrawPlayer(SKCanvas canvas, AbstractPlayer player, LocalPlayer localPlayer)
-{
-    var skeleton = player.Skeleton;
-    if (skeleton?.BoneTransforms == null || skeleton.BoneTransforms.Count == 0)
-        return false;
+        private bool DrawPlayer(SKCanvas canvas, AbstractPlayer player, LocalPlayer localPlayer)
+        {
+            var skeleton = player.Skeleton;
+            
+            // Double-check initialization (defensive programming)
+            if (skeleton == null || !skeleton.IsInitialized)
+                return false;
 
-    // Safely get head and pelvis
-    if (!skeleton.BoneTransforms.TryGetValue(Bones.HumanHead, out var head) ||
-        !skeleton.BoneTransforms.TryGetValue(Bones.HumanPelvis, out var pelvis))
-    {
-        return false;
-    }
+            // Safely get head and pelvis
+            if (!skeleton.BoneTransforms.TryGetValue(Bones.HumanHead, out var head) ||
+                !skeleton.BoneTransforms.TryGetValue(Bones.HumanPelvis, out var pelvis))
+            {
+                return false;
+            }
 
-    var headPos   = head.Position;
-    var pelvisPos = pelvis.Position;
+            var headPos   = head.Position;
+            var pelvisPos = pelvis.Position;
 
-    // World-space sanity check
-    if (!IsFinite(headPos) || !IsFinite(pelvisPos))
-        return false;
+            // World-space sanity check
+            if (!IsFinite(headPos) || !IsFinite(pelvisPos))
+                return false;
 
-    // Optional: skip totally insane world distances (wigged out bones far from player)
-    float worldHeight = Math.Abs(pelvisPos.Y - headPos.Y);
-    if (worldHeight <= 0.01f || worldHeight > 5.0f * 3.0f) // head¨Cpelvis difference > ~15m? nope.
-        return false;
+            // Optional: skip totally insane world distances (wigged out bones far from player)
+            float worldHeight = Math.Abs(pelvisPos.Y - headPos.Y);
+            if (worldHeight <= 0.01f || worldHeight > 5.0f * 3.0f) // head¨Cpelvis difference > ~15m? nope.
+                return false;
 
-    // World to screen
-    if (!CameraManager.WorldToScreen(in headPos, out var headScreen, true))
-        return false;
+            // World to screen
+            if (!CameraManager.WorldToScreen(in headPos, out var headScreen, true))
+                return false;
 
-    if (!CameraManager.WorldToScreen(in pelvisPos, out var pelvisScreen, true))
-        return false;
+            if (!CameraManager.WorldToScreen(in pelvisPos, out var pelvisScreen, true))
+                return false;
 
-    // Screen-space sanity check
-    if (!IsFinite(headScreen) || !IsFinite(pelvisScreen))
-        return false;
+            // Screen-space sanity check
+            if (!IsFinite(headScreen) || !IsFinite(pelvisScreen))
+                return false;
 
-    // Get screen size from canvas
-    var bounds   = canvas.LocalClipBounds;
-    float scrW   = bounds.Width;
-    float scrH   = bounds.Height;
+            // Get screen size from canvas
+            var bounds   = canvas.LocalClipBounds;
+            float scrW   = bounds.Width;
+            float scrH   = bounds.Height;
 
-    // Calculate box dimensions
-    float height = Math.Abs(pelvisScreen.Y - headScreen.Y);
-    if (height <= 0.1f)
-        return false;
+            // Calculate box dimensions
+            float height = Math.Abs(pelvisScreen.Y - headScreen.Y);
+            if (height <= 0.1f)
+                return false;
 
-    float width  = height * 0.5f;
+            float width  = height * 0.5f;
 
-    // Reject insane sizes (this is what usually causes lines across the whole screen)
-    // - Taller than 2x screen height
-    // - Wider than screen width
-    if (height > scrH * 2.0f || width > scrW * 1.2f)
-        return false;
+            // Reject insane sizes (this is what usually causes lines across the whole screen)
+            // - Taller than 2x screen height
+            // - Wider than screen width
+            if (height > scrH * 2.0f || width > scrW * 1.2f)
+                return false;
 
-    var boxRect = new SKRect(
-        headScreen.X - width / 2f,
-        headScreen.Y,
-        headScreen.X + width / 2f,
-        pelvisScreen.Y
-    );
+            var boxRect = new SKRect(
+                headScreen.X - width / 2f,
+                headScreen.Y,
+                headScreen.X + width / 2f,
+                pelvisScreen.Y
+            );
 
-    var paint = GetPaint(player);
+            var paint = GetPaint(player);
 
-    // Draw box
-    canvas.DrawRect(boxRect, paint);
+            // Draw box
+            canvas.DrawRect(boxRect, paint);
 
-    // Draw head dot
-    if (App.Config.ESP.ShowHeadDot)
-    {
-        canvas.DrawCircle(headScreen.X, headScreen.Y, 3f, paint);
-    }
+            // Draw head dot
+            if (App.Config.ESP.ShowHeadDot)
+            {
+                canvas.DrawCircle(headScreen.X, headScreen.Y, 3f, paint);
+            }
 
-    // Draw name
-    if (App.Config.ESP.ShowNames)
-    {
-        var namePos = new SKPoint(boxRect.MidX, boxRect.Top - 5);
-        canvas.DrawText(player.Name, namePos, SKTextAlign.Center, SKFonts.UIRegular, paint);
-    }
+            // Draw name
+            if (App.Config.ESP.ShowNames)
+            {
+                var namePos = new SKPoint(boxRect.MidX, boxRect.Top - 5);
+                canvas.DrawText(player.Name, namePos, SKTextAlign.Center, SKFonts.UIRegular, paint);
+            }
 
-    // Draw distance
-    if (App.Config.ESP.ShowDistance)
-    {
-        float distance = Vector3.Distance(localPlayer.Position, player.Position);
-        var distText   = $"{distance:F0}m";
-        var distPos    = new SKPoint(boxRect.MidX, boxRect.Bottom + 15);
-        canvas.DrawText(distText, distPos, SKTextAlign.Center, SKFonts.UIRegular, paint);
-    }
+            // Draw distance
+            if (App.Config.ESP.ShowDistance)
+            {
+                float distance = Vector3.Distance(localPlayer.Position, player.Position);
+                var distText   = $"{distance:F0}m";
+                var distPos    = new SKPoint(boxRect.MidX, boxRect.Bottom + 15);
+                canvas.DrawText(distText, distPos, SKTextAlign.Center, SKFonts.UIRegular, paint);
+            }
 
-    return true;
-}
-
+            return true;
+        }
 
         private static SKPaint GetPaint(AbstractPlayer player)
         {
@@ -197,6 +237,7 @@ private bool DrawPlayer(SKCanvas canvas, AbstractPlayer player, LocalPlayer loca
                 _                        => SKPaints.PaintPMC
             };
         }
+
         private static bool IsFinite(Vector3 v)
         {
             return !float.IsNaN(v.X) && !float.IsInfinity(v.X) &&
@@ -209,6 +250,7 @@ private bool DrawPlayer(SKCanvas canvas, AbstractPlayer player, LocalPlayer loca
             return !float.IsNaN(p.X) && !float.IsInfinity(p.X) &&
                    !float.IsNaN(p.Y) && !float.IsInfinity(p.Y);
         }
+
         public void Dispose()
         {
             _skElement.PaintSurface -= OnPaintSurface;

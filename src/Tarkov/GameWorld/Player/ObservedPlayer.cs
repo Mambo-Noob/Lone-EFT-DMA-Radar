@@ -172,17 +172,17 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
             {
                 if (playerBase == 0)
                     throw new InvalidOperationException("[ObservedPlayer] playerBase is 0 (bad registered/observed list offset)");
-
+        
                 playerBase.ThrowIfInvalidVirtualAddress(nameof(playerBase));
-
+        
                 var localPlayer = Memory.LocalPlayer;
                 ArgumentNullException.ThrowIfNull(localPlayer, nameof(localPlayer));
-
+        
                 // ObservedPlayerController
                 ObservedPlayerController = SafeReadPtr(
                     this + Offsets.ObservedPlayerView.ObservedPlayerController,
                     "[ObservedPlayer] ObservedPlayerController");
-
+        
                 // Validate ObservedPlayerController.Player == this
                 try
                 {
@@ -200,12 +200,12 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                     Debug.WriteLine($"[ObservedPlayer] ObservedPlayerController.Player check failed: {ex}");
                     throw;
                 }
-
+        
                 // ObservedHealthController
                 ObservedHealthController = SafeReadPtr(
                     ObservedPlayerController + Offsets.ObservedPlayerController.HealthController,
                     "[ObservedPlayer] ObservedHealthController");
-
+        
                 // Validate ObservedHealthController.Player == this
                 try
                 {
@@ -223,23 +223,23 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                     Debug.WriteLine($"[ObservedPlayer] ObservedHealthController.Player check failed: {ex}");
                     throw;
                 }
-
+        
                 // Body / controllers / corpse
                 Body = SafeReadPtr(this + Offsets.ObservedPlayerView.PlayerBody, "[ObservedPlayer] Body");
-
+        
                 InventoryControllerAddr = ObservedPlayerController + Offsets.ObservedPlayerController.InventoryController;
                 HandsControllerAddr     = ObservedPlayerController + Offsets.ObservedPlayerController.HandsController;
                 CorpseAddr              = ObservedHealthController + Offsets.ObservedHealthController.PlayerCorpse;
-
+        
                 // Movement / rotation
                 MovementContext = GetMovementContext();
                 RotationAddress = ValidateRotationAddr(MovementContext + Offsets.ObservedPlayerStateContext.Rotation);
-
+        
                 // Transform (CRITICAL)
                 var ti = SafeReadPtrChain("[ObservedPlayer] TransformInternal", this, _transformInternalChain);
                 SkeletonRoot = new UnityTransform(ti);
                 _ = SkeletonRoot.UpdatePosition();
-
+        
                 // Skeleton (optional)
                 try
                 {
@@ -249,24 +249,24 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                 {
                     Debug.WriteLine($"WARNING: Failed to initialize Skeleton for ObservedPlayer (ESP will be unavailable): {ex}");
                 }
-
+        
                 // AI / human flags
                 bool isAI = SafeReadValue<bool>(
                     this + Offsets.ObservedPlayerView.IsAI,
                     "[ObservedPlayer] IsAI");
                 IsHuman = !isAI;
-
+        
                 Profile = new PlayerProfile(this, GetAccountID());
-
+        
                 // Group ID
                 GroupID = isAI ? -1 : GetGroupNumber();
-
+        
                 // Side / type / name
                 var sideAddr = this + Offsets.ObservedPlayerView.Side;
                 PlayerSide = (Enums.EPlayerSide)SafeReadValue<int>(sideAddr, "[ObservedPlayer] Side");
                 if (!Enum.IsDefined(typeof(Enums.EPlayerSide), PlayerSide))
                     throw new InvalidOperationException($"[ObservedPlayer] Invalid PlayerSide value: {PlayerSide}");
-
+        
                 if (IsScav)
                 {
                     if (isAI)
@@ -297,7 +297,7 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                 {
                     throw new NotImplementedException($"[ObservedPlayer] Unsupported PlayerSide: {PlayerSide}");
                 }
-
+        
                 // Profile cache only for humans
                 if (IsHuman)
                 {
@@ -321,10 +321,10 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
                     {
                         EFTProfileService.RegisterProfile(Profile);
                     }
-
+        
                     PlayerHistoryViewModel.Add(this); // Log to player history
                 }
-
+        
                 // Watchlist
                 if (IsHumanHostile)
                 {
@@ -346,22 +346,22 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         {
             if (addr == 0)
                 throw new InvalidOperationException($"{fieldName}: source address is 0x0");
-
+        
             var value = Memory.ReadPtr(addr, false);
             if (value == 0)
                 throw new InvalidOperationException($"{fieldName}: read value is 0x0 (bad offset / not initialized)");
-
+        
             return value;
         }
-
+        
         private static T SafeReadValue<T>(ulong addr, string fieldName) where T : unmanaged
         {
             if (addr == 0)
                 throw new InvalidOperationException($"{fieldName}: address is 0x0");
-
+        
             return Memory.ReadValue<T>(addr, false);
         }
-
+        
         /// <summary>
         /// Wrapper for ReadPtrChain that asserts non-zero and logs context.
         /// </summary>
@@ -370,41 +370,10 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
             var value = Memory.ReadPtrChain(root, false, chain);
             if (value == 0)
                 throw new InvalidOperationException($"{fieldName}: ReadPtrChain returned 0 (bad chain / offsets)");
-
+        
             return value;
         }
 
-        public override void EnsureSkeletonInitialized()
-        {
-            if (Skeleton != null && SkeletonRoot != null && SkeletonRoot.TransformInternal != 0)
-                return;
-
-            var now = DateTime.UtcNow;
-            if (now < NextSkeletonRetryUtc)
-                return;
-
-            NextSkeletonRetryUtc = now.AddMilliseconds(500);
-
-            try
-            {
-                if (SkeletonRoot == null || SkeletonRoot.TransformInternal == 0)
-                {
-                    var ti = SafeReadPtrChain("[ObservedPlayer] TransformInternal(retry)", this, _transformInternalChain);
-                    SkeletonRoot = new UnityTransform(ti);
-                    _ = SkeletonRoot.UpdatePosition();
-                }
-
-                if (Skeleton == null && SkeletonRoot.TransformInternal != 0)
-                {
-                    Skeleton = new Skeleton(this, SkeletonRoot.TransformInternal);
-                    Debug.WriteLine($"[Skeleton] Reinitialized for ObservedPlayer '{Name}'");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Skeleton] Reinit failed for ObservedPlayer '{Name}': {ex.Message}");
-            }
-        }
 
         /// <summary>
         /// Get Player's Account ID.
@@ -450,16 +419,12 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
         {
             if (isActiveParam is not bool isActive)
                 isActive = registered.Contains(this);
-
             if (isActive)
             {
                 UpdateHealthStatus();
-                EnsureSkeletonInitialized(); // <── keep skeleton up to date here
             }
-
             base.OnRegRefresh(scatter, registered, isActive);
         }
-
 
         /// <summary>
         /// Get Player's Updated Health Condition

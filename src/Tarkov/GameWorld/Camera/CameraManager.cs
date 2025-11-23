@@ -20,8 +20,8 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Camera
 {
     public sealed class CameraManager
     {
-        public ulong FPSCamera { get; }
-        public ulong OpticCamera { get; }
+        public ulong FPSCamera { get; private set; }
+        public ulong OpticCamera { get; private set; }
 
         // Static debug copies
         public static ulong FPSCameraPtr { get; private set; }
@@ -31,134 +31,298 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Camera
         // Matrix address pointers (via chain: GameObject+0x48→+0x18)
         private ulong _fpsMatrixAddress;
         private ulong _opticMatrixAddress;
+        
+        // Validation tracking
+        private int _consecutiveMatrixFailures;
+        private const int MAX_MATRIX_FAILURES_BEFORE_RESET = 30; // ~3 seconds at 10fps
+        private DateTime _lastValidMatrix = DateTime.MinValue;
+        private bool _matrixInitialized;
+        
+        // Stuck matrix detection
+        private Matrix4x4 _lastMatrix;
+        private int _consecutiveIdenticalMatrices;
+        private const int MAX_IDENTICAL_MATRICES_BEFORE_RESET = 50; // ~5 seconds at 10fps
+        private DateTime _lastMatrixChange = DateTime.MinValue;
 
         private bool OpticCameraActive =>
             Memory.ReadValue<bool>(OpticCamera + UnitySDK.UnityOffsets.MonoBehaviour_IsAddedOffset, false);
 
-public CameraManager()
-{
-    try
-    {
-        Debug.WriteLine("=== CameraManager Initialization ===");
-        Debug.WriteLine($"Unity Base: 0x{Memory.UnityBase:X}");
-        Debug.WriteLine($"AllCameras Offset: 0x{UnitySDK.UnityOffsets.AllCameras:X}");
-
-        // Calculate AllCameras address
-        var allCamerasAddr = Memory.UnityBase + UnitySDK.UnityOffsets.AllCameras;
-        Debug.WriteLine($"AllCameras Address: 0x{allCamerasAddr:X}");
-
-        // Read the AllCameras pointer
-        var allCamerasPtr = Memory.ReadPtr(allCamerasAddr, false);
-        Debug.WriteLine($"AllCameras Ptr: 0x{allCamerasPtr:X}");
-
-        if (allCamerasPtr == 0)
+        public CameraManager()
         {
-            Debug.WriteLine("⚠️ CRITICAL: AllCameras pointer is NULL!");
-            Debug.WriteLine("This means the AllCameras offset is likely wrong.");
-            throw new InvalidOperationException("AllCameras pointer is NULL - offset may be outdated");
+            Debug.WriteLine("=== CameraManager Initialization ===");
+            Debug.WriteLine($"Unity Base: 0x{Memory.UnityBase:X}");
+            Debug.WriteLine($"AllCameras Offset: 0x{UnitySDK.UnityOffsets.AllCameras:X}");
+
+            // Start a background thread to keep trying to initialize cameras
+            var initThread = new Thread(InitializationLoop)
+            {
+                IsBackground = true,
+                Name = "CameraManager Initialization"
+            };
+            initThread.Start();
         }
 
-        if (allCamerasPtr > 0x7FFFFFFFFFFF)
+        /// <summary>
+        /// Background thread that keeps retrying camera initialization until successful
+        /// </summary>
+        private void InitializationLoop()
         {
-            Debug.WriteLine($"⚠️ CRITICAL: AllCameras pointer is invalid: 0x{allCamerasPtr:X}");
-            throw new InvalidOperationException($"Invalid AllCameras pointer: 0x{allCamerasPtr:X}");
+            int attemptNumber = 0;
+            DateTime lastLogTime = DateTime.MinValue;
+            
+            // ✅ CRITICAL FIX: Wait for old raid's cameras to be destroyed
+            // When raid ends, old cameras remain in memory for a bit
+            // If we try immediately, we'll find the OLD cameras and use stale data
+            Debug.WriteLine("[CameraManager] Waiting 1 min for old raid cameras to be cleaned up...");
+            Thread.Sleep(60000);
+            Debug.WriteLine("[CameraManager] Starting camera search for new raid...");
+
+            while (!_matrixInitialized)
+            {
+                try
+                {
+                    attemptNumber++;
+                    bool shouldLog = (DateTime.UtcNow - lastLogTime).TotalSeconds >= 5.0;
+
+                    if (shouldLog)
+                    {
+                        Debug.WriteLine($"[CameraManager] Initialization attempt #{attemptNumber}...");
+                        lastLogTime = DateTime.UtcNow;
+                    }
+
+                    // Try to find cameras
+                    if (TryInitializeCameras(shouldLog))
+                    {
+                        Debug.WriteLine($"[CameraManager] ✓✓✓ Successfully initialized after {attemptNumber} attempts! ✓✓✓");
+                        return; // Success!
+                    }
+
+                    // Wait before retrying (shorter wait for first few attempts)
+                    Thread.Sleep(attemptNumber < 10 ? 500 : 1000);
+                }
+                catch (Exception ex)
+                {
+                    if ((DateTime.UtcNow - lastLogTime).TotalSeconds >= 5.0)
+                    {
+                        Debug.WriteLine($"[CameraManager] Initialization error (will retry): {ex.Message}");
+                        lastLogTime = DateTime.UtcNow;
+                    }
+                    Thread.Sleep(1000);
+                }
+            }
         }
 
-        // AllCameras is a List<Camera*>
-        // Structure: +0x0 = items array pointer, +0x8 = count (int)
-        var listItemsPtr = Memory.ReadPtr(allCamerasPtr + 0x0, false);
-        var count = Memory.ReadValue<int>(allCamerasPtr + 0x8, false);
-
-        Debug.WriteLine($"\nList Structure:");
-        Debug.WriteLine($"  Items Pointer: 0x{listItemsPtr:X}");
-        Debug.WriteLine($"  Count: {count}");
-
-        if (listItemsPtr == 0)
-        {
-            Debug.WriteLine("⚠️ CRITICAL: List items pointer is NULL!");
-            throw new InvalidOperationException("Camera list items pointer is NULL");
-        }
-
-        if (count <= 0)
-        {
-            Debug.WriteLine("⚠️ CRITICAL: Camera count is 0 or negative!");
-            Debug.WriteLine("This usually means you're not in a raid yet.");
-            throw new InvalidOperationException($"No cameras in list (count: {count})");
-        }
-
-        if (count > 100)
-        {
-            Debug.WriteLine($"⚠️ WARNING: Camera count seems high: {count}");
-            Debug.WriteLine("This might indicate memory corruption or wrong structure.");
-        }
-
-        var (fps, optic) = FindCamerasByName(listItemsPtr, count);
-
-        if (fps == 0 || optic == 0)
-        {
-            Debug.WriteLine("\n⚠️ CRITICAL: Could not find required cameras!");
-            throw new InvalidOperationException(
-                $"Could not find cameras. FPS: {(fps != 0 ? "Found" : "Missing")}, " +
-                $"Optic: {(optic != 0 ? "Found" : "Missing")}");
-        }
-
-        FPSCamera = fps;
-        OpticCamera = optic;
-
-        Debug.WriteLine("\n=== Getting Matrix Addresses ===");
-        _fpsMatrixAddress = GetMatrixAddress(FPSCamera);
-        _opticMatrixAddress = GetMatrixAddress(OpticCamera);
-
-        FPSCameraPtr = fps;
-        OpticCameraPtr = optic;
-        ActiveCameraPtr = 0;
-
-        Debug.WriteLine($"\n✓ FPS Camera: 0x{FPSCamera:X}");
-        Debug.WriteLine($"  GameObject: 0x{Memory.ReadPtr(FPSCamera + 0x50, false):X}");
-        Debug.WriteLine($"  Matrix Address: 0x{_fpsMatrixAddress:X}");
-        
-        Debug.WriteLine($"✓ Optic Camera: 0x{OpticCamera:X}");
-        Debug.WriteLine($"  GameObject: 0x{Memory.ReadPtr(OpticCamera + 0x50, false):X}");
-        Debug.WriteLine($"  Matrix Address: 0x{_opticMatrixAddress:X}");
-
-        VerifyViewMatrix(_fpsMatrixAddress, "FPS");
-        VerifyViewMatrix(_opticMatrixAddress, "Optic");
-
-        Debug.WriteLine("=== CameraManager Initialization Complete ===\n");
-    }
-    catch (Exception ex)
-    {
-        Debug.WriteLine($"⚠️ CameraManager initialization failed: {ex}");
-        throw;
-    }
-}
-
-        private static ulong GetMatrixAddress(ulong cameraPtr)
-        {
-            // Camera + 0x48 → GameObject
-            var gameObject = Memory.ReadPtr(cameraPtr + 0x50, false);
-            if (gameObject == 0 || gameObject > 0x7FFFFFFFFFFF)
-                throw new InvalidOperationException($"Invalid GameObject: 0x{gameObject:X}");
-
-            // GameObject + 0x48 → Pointer1
-            var ptr1 = Memory.ReadPtr(gameObject + 0x50, false);
-            if (ptr1 == 0 || ptr1 > 0x7FFFFFFFFFFF)
-                throw new InvalidOperationException($"Invalid Ptr1 (GameObject+0x50): 0x{ptr1:X}");
-
-            // Pointer1 + 0x18 → matrixAddress
-            var matrixAddress = Memory.ReadPtr(ptr1 + 0x18, false);
-            if (matrixAddress == 0 || matrixAddress > 0x7FFFFFFFFFFF)
-                throw new InvalidOperationException($"Invalid matrixAddress (Ptr1+0x18): 0x{matrixAddress:X}");
-
-            return matrixAddress;
-        }
-
-        private static void VerifyViewMatrix(ulong matrixAddress, string name)
+        /// <summary>
+        /// Try to initialize cameras. Returns true if successful.
+        /// </summary>
+        private bool TryInitializeCameras(bool verbose)
         {
             try
             {
-                Debug.WriteLine($"\n{name} Matrix @ 0x{matrixAddress:X}:");
+                // Calculate AllCameras address
+                var allCamerasAddr = Memory.UnityBase + UnitySDK.UnityOffsets.AllCameras;
+                var allCamerasPtr = Memory.ReadPtr(allCamerasAddr, false);
 
+                if (allCamerasPtr == 0 || allCamerasPtr > 0x7FFFFFFFFFFF)
+                {
+                    if (verbose)
+                        Debug.WriteLine($"[CameraManager] AllCameras pointer invalid: 0x{allCamerasPtr:X} (waiting for raid load...)");
+                    return false;
+                }
+
+                // AllCameras is a List<Camera*>
+                var listItemsPtr = Memory.ReadPtr(allCamerasPtr + 0x0, false);
+                var count = Memory.ReadValue<int>(allCamerasPtr + 0x8, false);
+
+                if (listItemsPtr == 0 || count <= 0)
+                {
+                    if (verbose)
+                        Debug.WriteLine($"[CameraManager] No cameras in list yet (count: {count}) - waiting for raid to load...");
+                    return false;
+                }
+
+                if (verbose)
+                {
+                    Debug.WriteLine($"[CameraManager] Found {count} cameras in list, searching...");
+                }
+
+                // Find cameras by name
+                var (fps, optic) = FindCamerasByName(listItemsPtr, count, verbose);
+
+                if (fps == 0)
+                {
+                    if (verbose)
+                        Debug.WriteLine($"[CameraManager] FPS Camera not found yet (waiting for raid to spawn cameras...)");
+                    return false;
+                }
+
+                if (optic == 0)
+                {
+                    if (verbose)
+                        Debug.WriteLine($"[CameraManager] Optic Camera not found yet (waiting...)");
+                    return false;
+                }
+
+                // Both cameras found! Try to get matrix addresses
+                FPSCamera = fps;
+                OpticCamera = optic;
+
+                if (verbose)
+                {
+                    Debug.WriteLine($"[CameraManager] Getting matrix addresses...");
+                }
+
+                _fpsMatrixAddress = GetMatrixAddress(FPSCamera);
+                _opticMatrixAddress = GetMatrixAddress(OpticCamera);
+                
+                // ✅ Check if matrix addresses are valid
+                if (_fpsMatrixAddress == 0)
+                {
+                    if (verbose)
+                        Debug.WriteLine($"[CameraManager] Failed to get FPS camera matrix address (camera likely stale from previous raid)");
+                    return false;
+                }
+                
+                if (_opticMatrixAddress == 0)
+                {
+                    if (verbose)
+                        Debug.WriteLine($"[CameraManager] Failed to get Optic camera matrix address (camera likely stale from previous raid)");
+                    return false;
+                }
+
+                FPSCameraPtr = fps;
+                OpticCameraPtr = optic;
+                ActiveCameraPtr = 0;
+
+                if (verbose)
+                {
+                    Debug.WriteLine($"[CameraManager] ✓ FPS Camera: 0x{FPSCamera:X}");
+                    Debug.WriteLine($"[CameraManager]   Matrix Address: 0x{_fpsMatrixAddress:X}");
+                    Debug.WriteLine($"[CameraManager] ✓ Optic Camera: 0x{OpticCamera:X}");
+                    Debug.WriteLine($"[CameraManager]   Matrix Address: 0x{_opticMatrixAddress:X}");
+                }
+
+                // Validate FPS camera matrix
+                bool fpsValid = VerifyViewMatrix(_fpsMatrixAddress, verbose ? "FPS" : null);
+                
+                if (fpsValid)
+                {
+                    _matrixInitialized = true;
+                    _lastValidMatrix = DateTime.UtcNow;
+                    _lastMatrixChange = DateTime.UtcNow;
+                    
+                    Debug.WriteLine("[CameraManager] ✓ FPS Camera validated successfully - READY!");
+                    
+                    // Check optic (just for logging, not required)
+                    bool opticValid = VerifyViewMatrix(_opticMatrixAddress, null);
+                    if (!opticValid && verbose)
+                    {
+                        Debug.WriteLine("[CameraManager] Note: Optic camera not yet valid (normal until you scope in)");
+                    }
+                    
+                    return true;
+                }
+                else
+                {
+                    if (verbose)
+                        Debug.WriteLine("[CameraManager] FPS camera matrix not yet valid (waiting for game to fully load...)");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (verbose)
+                    Debug.WriteLine($"[CameraManager] TryInitializeCameras error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Reset matrix addresses if they appear corrupted
+        /// </summary>
+        private void ResetMatrixAddresses()
+        {
+            try
+            {
+                Debug.WriteLine("[CameraManager] Resetting matrix addresses...");
+                
+                _fpsMatrixAddress = GetMatrixAddress(FPSCamera);
+                _opticMatrixAddress = GetMatrixAddress(OpticCamera);
+                
+                bool fpsValid = VerifyViewMatrix(_fpsMatrixAddress, "FPS (after reset)");
+                bool opticValid = VerifyViewMatrix(_opticMatrixAddress, "Optic (after reset)");
+                
+                // ✅ FIXED: Only require FPS to be valid
+                if (fpsValid)
+                {
+                    _matrixInitialized = true;
+                    _consecutiveMatrixFailures = 0;
+                    _consecutiveIdenticalMatrices = 0; // Reset stuck counter
+                    _lastValidMatrix = DateTime.UtcNow;
+                    _lastMatrixChange = DateTime.UtcNow;
+                    _lastMatrix = default; // Clear last matrix
+                    Debug.WriteLine("[CameraManager] ✓ Matrix reset successful (FPS camera valid)");
+                    
+                    if (!opticValid)
+                    {
+                        Debug.WriteLine("[CameraManager] Note: Optic camera still invalid (normal until scoped)");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("[CameraManager] ⚠️ Matrix reset failed - FPS camera still invalid");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[CameraManager] ERROR resetting matrix addresses: {ex}");
+            }
+        }
+
+        private static ulong GetMatrixAddress(ulong cameraPtr)
+        {
+            try
+            {
+                // Camera + 0x50 → GameObject
+                var gameObject = Memory.ReadPtr(cameraPtr + 0x50, false);
+                if (gameObject == 0 || gameObject > 0x7FFFFFFFFFFF)
+                {
+                    Debug.WriteLine($"[GetMatrixAddress] Invalid GameObject: 0x{gameObject:X}");
+                    return 0;
+                }
+
+                // GameObject + 0x50 → Pointer1
+                var ptr1 = Memory.ReadPtr(gameObject + 0x50, false);
+                if (ptr1 == 0 || ptr1 > 0x7FFFFFFFFFFF)
+                {
+                    Debug.WriteLine($"[GetMatrixAddress] Invalid Ptr1 (GameObject+0x50): 0x{ptr1:X}");
+                    return 0;
+                }
+
+                // Pointer1 + 0x18 → matrixAddress
+                var matrixAddress = Memory.ReadPtr(ptr1 + 0x18, false);
+                if (matrixAddress == 0 || matrixAddress > 0x7FFFFFFFFFFF)
+                {
+                    Debug.WriteLine($"[GetMatrixAddress] Invalid matrixAddress (Ptr1+0x18): 0x{matrixAddress:X}");
+                    return 0;
+                }
+
+                return matrixAddress;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[GetMatrixAddress] Exception: {ex.Message}");
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Verify that a matrix contains reasonable data
+        /// </summary>
+        private static bool VerifyViewMatrix(ulong matrixAddress, string name)
+        {
+            try
+            {
                 // Read ViewMatrix at +0x118
                 var vm = Memory.ReadValue<Matrix4x4>(matrixAddress + 0x118, false);
 
@@ -167,126 +331,289 @@ public CameraManager()
                 float upMag = MathF.Sqrt(vm.M21 * vm.M21 + vm.M22 * vm.M22 + vm.M23 * vm.M23);
                 float fwdMag = MathF.Sqrt(vm.M31 * vm.M31 + vm.M32 * vm.M32 + vm.M33 * vm.M33);
 
-                Debug.WriteLine($"  M44: {vm.M44:F6}");
-                Debug.WriteLine($"  Translation: ({vm.M41:F2}, {vm.M42:F2}, {vm.M43:F2})");
-                Debug.WriteLine($"  Right mag: {rightMag:F4}, Up mag: {upMag:F4}, Fwd mag: {fwdMag:F4}");
-                Debug.WriteLine($"  Right: ({vm.M11:F3}, {vm.M12:F3}, {vm.M13:F3})");
-                Debug.WriteLine($"  Up: ({vm.M21:F3}, {vm.M22:F3}, {vm.M23:F3})");
-                Debug.WriteLine($"  Forward: ({vm.M31:F3}, {vm.M32:F3}, {vm.M33:F3})");
+                if (!string.IsNullOrEmpty(name))
+                {
+                    Debug.WriteLine($"\n{name} Matrix @ 0x{matrixAddress:X}:");
+                    Debug.WriteLine($"  M44: {vm.M44:F6}");
+                    Debug.WriteLine($"  Translation: ({vm.M41:F2}, {vm.M42:F2}, {vm.M43:F2})");
+                    Debug.WriteLine($"  Right mag: {rightMag:F4}, Up mag: {upMag:F4}, Fwd mag: {fwdMag:F4}");
+                    Debug.WriteLine($"  Right: ({vm.M11:F3}, {vm.M12:F3}, {vm.M13:F3})");
+                    Debug.WriteLine($"  Up: ({vm.M21:F3}, {vm.M22:F3}, {vm.M23:F3})");
+                    Debug.WriteLine($"  Forward: ({vm.M31:F3}, {vm.M32:F3}, {vm.M33:F3})");
+                }
 
-                bool isValid = rightMag > 0.9f && rightMag < 1.1f &&
-                               upMag > 0.9f && upMag < 1.1f &&
-                               fwdMag > 0.9f && fwdMag < 1.1f &&
-                               Math.Abs(vm.M44 - 1.0f) < 0.1f;
+                // Check for NaN or Infinity
+                bool hasInvalidValues = float.IsNaN(vm.M44) || float.IsInfinity(vm.M44) ||
+                                       float.IsNaN(rightMag) || float.IsInfinity(rightMag) ||
+                                       float.IsNaN(upMag) || float.IsInfinity(upMag) ||
+                                       float.IsNaN(fwdMag) || float.IsInfinity(fwdMag);
 
-                Debug.WriteLine($"  ✓ Valid: {isValid}");
+                if (hasInvalidValues)
+                {
+                    if (!string.IsNullOrEmpty(name))
+                        Debug.WriteLine($"  ✓ Valid: False (NaN/Infinity detected)");
+                    return false;
+                }
+
+                // ✅ NEW: Check for identity/default matrix (indicates stale/uninitialized camera)
+                // M44 close to 1.0 with all vectors near zero = likely default/identity matrix
+                bool looksLikeIdentity = MathF.Abs(vm.M44 - 1.0f) < 0.01f &&  // M44 ≈ 1.0
+                                        rightMag < 0.1f &&                      // Right vector tiny
+                                        upMag < 0.1f &&                         // Up vector tiny  
+                                        fwdMag < 0.1f;                          // Forward vector tiny
+
+                if (looksLikeIdentity)
+                {
+                    if (!string.IsNullOrEmpty(name))
+                        Debug.WriteLine($"  ✓ Valid: False (appears to be identity/default matrix - camera not initialized)");
+                    return false;
+                }
+
+                // ✅ NEW: Check for all-zeros matrix (also indicates uninitialized)
+                bool looksLikeZeros = MathF.Abs(vm.M44) < 0.01f &&
+                                     rightMag < 0.01f &&
+                                     upMag < 0.01f &&
+                                     fwdMag < 0.01f;
+
+                if (looksLikeZeros)
+                {
+                    if (!string.IsNullOrEmpty(name))
+                        Debug.WriteLine($"  ✓ Valid: False (all zeros - camera not initialized)");
+                    return false;
+                }
+
+                // Check if at least ONE direction vector has reasonable magnitude
+                bool hasAtLeastOneValidVector = (rightMag > 0.01f && rightMag < 50.0f) ||
+                                                (upMag > 0.01f && upMag < 50.0f) ||
+                                                (fwdMag > 0.01f && fwdMag < 50.0f);
+
+                // ✅ NEW: Also require M44 to be significantly different from 1.0 for FPS camera
+                // Real camera matrices in-game typically have M44 values like 50-200+
+                // If M44 ≈ 1.0, it's likely a default/stale matrix
+                bool m44LooksRealistic = MathF.Abs(vm.M44) > 10.0f;  // Real values are typically 50-200+
+                
+                if (!m44LooksRealistic && !string.IsNullOrEmpty(name))
+                {
+                    Debug.WriteLine($"  ⚠️ Warning: M44 = {vm.M44:F6} seems unrealistic (expected > 10.0)");
+                }
+
+                bool isValid = hasAtLeastOneValidVector && m44LooksRealistic;
+                
+                if (!string.IsNullOrEmpty(name))
+                    Debug.WriteLine($"  ✓ Valid: {isValid}");
+                    
+                return isValid;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ERROR verifying ViewMatrix for {name}: {ex}");
+                if (!string.IsNullOrEmpty(name))
+                    Debug.WriteLine($"ERROR verifying ViewMatrix for {name}: {ex}");
+                return false;
             }
         }
 
-private static (ulong fpsCamera, ulong opticCamera) FindCamerasByName(ulong listItemsPtr, int count)
-{
-    ulong fpsCamera = 0;
-    ulong opticCamera = 0;
-
-    Debug.WriteLine($"\n=== Searching for Cameras ===");
-    Debug.WriteLine($"List Items Ptr: 0x{listItemsPtr:X}");
-    Debug.WriteLine($"Camera Count: {count}");
-    Debug.WriteLine($"Scanning cameras...\n");
-
-    for (int i = 0; i < Math.Min(count, 100); i++)
-    {
-        try
+        /// <summary>
+        /// Check if the matrix has changed since last read (not stuck/frozen)
+        /// </summary>
+        private bool IsMatrixChanging(ref readonly Matrix4x4 vm)
         {
-            // Each item in the array is a pointer (8 bytes)
-            ulong cameraEntryAddr = listItemsPtr + (uint)(i * 0x8);
-            var cameraPtr = Memory.ReadPtr(cameraEntryAddr, false);
+            // Compare key components that should change as camera moves
+            // Using a small epsilon for floating point comparison
+            const float epsilon = 0.0001f;
             
-            if (cameraPtr == 0 || cameraPtr > 0x7FFFFFFFFFFF)
-            {
-                Debug.WriteLine($"  [{i:D2}] Invalid camera pointer: 0x{cameraPtr:X}");
-                continue;
-            }
-
-            // Camera+0x50 -> GameObject
-            var gameObjectPtr = Memory.ReadPtr(cameraPtr + 0x50, false);
-            if (gameObjectPtr == 0 || gameObjectPtr > 0x7FFFFFFFFFFF)
-            {
-                Debug.WriteLine($"  [{i:D2}] Camera 0x{cameraPtr:X} -> Invalid GameObject: 0x{gameObjectPtr:X}");
-                continue;
-            }
-
-            // GameObject+0x78 -> Name string pointer
-            var namePtr = Memory.ReadPtr(gameObjectPtr + UnitySDK.UnityOffsets.GameObject_NameOffset, false);
-            if (namePtr == 0 || namePtr > 0x7FFFFFFFFFFF)
-            {
-                Debug.WriteLine($"  [{i:D2}] GameObject 0x{gameObjectPtr:X} -> Invalid name ptr: 0x{namePtr:X}");
-                continue;
-            }
-
-            // Read the name string
-            var name = Memory.ReadUtf8String(namePtr, 64, false);
-            if (string.IsNullOrEmpty(name) || name.Length < 3)
-            {
-                Debug.WriteLine($"  [{i:D2}] Name pointer 0x{namePtr:X} -> Invalid/empty name");
-                continue;
-            }
-
-            Debug.WriteLine($"  [{i:D2}] Camera: '{name}'");
-            Debug.WriteLine($"       @ 0x{cameraPtr:X}");
-            Debug.WriteLine($"       GameObject: 0x{gameObjectPtr:X}");
-
-            // Check for FPS Camera
-            bool isFPS = name.Contains("FPS", StringComparison.OrdinalIgnoreCase) &&
-                        name.Contains("Camera", StringComparison.OrdinalIgnoreCase);
+            bool isIdentical = Math.Abs(vm.M14 - _lastMatrix.M14) < epsilon &&
+                              Math.Abs(vm.M24 - _lastMatrix.M24) < epsilon &&
+                              Math.Abs(vm.M44 - _lastMatrix.M44) < epsilon &&
+                              Math.Abs(vm.M41 - _lastMatrix.M41) < epsilon &&
+                              Math.Abs(vm.M42 - _lastMatrix.M42) < epsilon &&
+                              Math.Abs(vm.M43 - _lastMatrix.M43) < epsilon;
             
-            // Check for Optic Camera  
-            bool isOptic = (name.Contains("Optic", StringComparison.OrdinalIgnoreCase) ||
-                           name.Contains("BaseOptic", StringComparison.OrdinalIgnoreCase)) &&
-                          name.Contains("Camera", StringComparison.OrdinalIgnoreCase);
-
-            if (isFPS)
+            if (isIdentical)
             {
-                fpsCamera = cameraPtr;
-                Debug.WriteLine($"       ✓✓✓ MATCHED AS FPS CAMERA ✓✓✓");
+                _consecutiveIdenticalMatrices++;
+                
+                // Only log occasionally
+                if (_consecutiveIdenticalMatrices % 25 == 0)
+                {
+                    Debug.WriteLine($"[CameraManager] Matrix appears frozen ({_consecutiveIdenticalMatrices} identical reads)");
+                }
+                
+                return false;
             }
-            
-            if (isOptic)
+            else
             {
-                opticCamera = cameraPtr;
-                Debug.WriteLine($"       ✓✓✓ MATCHED AS OPTIC CAMERA ✓✓✓");
-            }
-
-            if (fpsCamera != 0 && opticCamera != 0)
-            {
-                Debug.WriteLine($"\n✓ Both cameras found! Stopping search at index {i}.");
-                break;
+                // Matrix changed - reset counter
+                _consecutiveIdenticalMatrices = 0;
+                _lastMatrixChange = DateTime.UtcNow;
+                _lastMatrix = vm;
+                return true;
             }
         }
-        catch (Exception ex)
+
+        /// <summary>
+        /// Check if we need to reset due to stuck matrix
+        /// </summary>
+        private bool ShouldResetDueToStuckMatrix()
         {
-            Debug.WriteLine($"  [{i:D2}] Exception: {ex.Message}");
+            // If matrix hasn't changed in a long time and we're supposedly in raid
+            if (_consecutiveIdenticalMatrices >= MAX_IDENTICAL_MATRICES_BEFORE_RESET)
+            {
+                Debug.WriteLine($"[CameraManager] Matrix stuck at same values for {_consecutiveIdenticalMatrices} reads - likely stale from previous raid");
+                return true;
+            }
+            
+            return false;
         }
-    }
+        private bool ValidateCurrentMatrix(ref readonly Matrix4x4 vm)
+        {
+            // Check for NaN/Infinity
+            if (float.IsNaN(vm.M11) || float.IsNaN(vm.M44) || float.IsNaN(vm.M14) ||
+                float.IsInfinity(vm.M11) || float.IsInfinity(vm.M44) || float.IsInfinity(vm.M14))
+            {
+                return false;
+            }
 
-    Debug.WriteLine($"\n=== Search Results ===");
-    Debug.WriteLine($"  FPS Camera:   {(fpsCamera != 0 ? $"✓ Found @ 0x{fpsCamera:X}" : "✗ NOT FOUND")}");
-    Debug.WriteLine($"  Optic Camera: {(opticCamera != 0 ? $"✓ Found @ 0x{opticCamera:X}" : "✗ NOT FOUND")}");
+            // Calculate direction vector magnitudes
+            float rightMag = MathF.Sqrt(vm.M11 * vm.M11 + vm.M12 * vm.M12 + vm.M13 * vm.M13);
+            float upMag = MathF.Sqrt(vm.M21 * vm.M21 + vm.M22 * vm.M22 + vm.M23 * vm.M23);
+            float fwdMag = MathF.Sqrt(vm.M31 * vm.M31 + vm.M32 * vm.M32 + vm.M33 * vm.M33);
 
-    return (fpsCamera, opticCamera);
-}
+            // ✅ Check for identity/default matrix (indicates stale camera from previous raid)
+            bool looksLikeIdentity = MathF.Abs(vm.M44 - 1.0f) < 0.01f &&
+                                    rightMag < 0.1f &&
+                                    upMag < 0.1f &&
+                                    fwdMag < 0.1f;
+
+            if (looksLikeIdentity)
+                return false;
+
+            // ✅ Check for all-zeros matrix
+            bool looksLikeZeros = MathF.Abs(vm.M44) < 0.01f &&
+                                 rightMag < 0.01f &&
+                                 upMag < 0.01f &&
+                                 fwdMag < 0.01f;
+
+            if (looksLikeZeros)
+                return false;
+
+            // Check if at least ONE direction vector has reasonable magnitude
+            bool hasAtLeastOneValidVector = (rightMag > 0.01f && rightMag < 50.0f) ||
+                                            (upMag > 0.01f && upMag < 50.0f) ||
+                                            (fwdMag > 0.01f && fwdMag < 50.0f);
+
+            // ✅ Require M44 to be significantly different from 1.0
+            // Real camera matrices typically have M44 values like 50-200+
+            bool m44LooksRealistic = MathF.Abs(vm.M44) > 10.0f;
+
+            return hasAtLeastOneValidVector && m44LooksRealistic;
+        }
+
+        private static (ulong fpsCamera, ulong opticCamera) FindCamerasByName(ulong listItemsPtr, int count, bool verbose)
+        {
+            ulong fpsCamera = 0;
+            ulong opticCamera = 0;
+
+            if (verbose)
+            {
+                Debug.WriteLine($"[CameraManager] Scanning {count} cameras for FPS/Optic...");
+            }
+
+            for (int i = 0; i < Math.Min(count, 100); i++)
+            {
+                try
+                {
+                    // Each item in the array is a pointer (8 bytes)
+                    ulong cameraEntryAddr = listItemsPtr + (uint)(i * 0x8);
+                    var cameraPtr = Memory.ReadPtr(cameraEntryAddr, false);
+                    
+                    if (cameraPtr == 0 || cameraPtr > 0x7FFFFFFFFFFF)
+                        continue;
+
+                    // Camera+0x50 -> GameObject
+                    var gameObjectPtr = Memory.ReadPtr(cameraPtr + 0x50, false);
+                    if (gameObjectPtr == 0 || gameObjectPtr > 0x7FFFFFFFFFFF)
+                        continue;
+
+                    // GameObject+0x78 -> Name string pointer
+                    var namePtr = Memory.ReadPtr(gameObjectPtr + UnitySDK.UnityOffsets.GameObject_NameOffset, false);
+                    if (namePtr == 0 || namePtr > 0x7FFFFFFFFFFF)
+                        continue;
+
+                    // Read the name string
+                    var name = Memory.ReadUtf8String(namePtr, 64, false);
+                    if (string.IsNullOrEmpty(name) || name.Length < 3)
+                        continue;
+
+                    if (verbose)
+                    {
+                        Debug.WriteLine($"  [{i:D2}] Camera: '{name}' @ 0x{cameraPtr:X}");
+                    }
+
+                    // Check for FPS Camera
+                    bool isFPS = name.Contains("FPS", StringComparison.OrdinalIgnoreCase) &&
+                                name.Contains("Camera", StringComparison.OrdinalIgnoreCase);
+                    
+                    // Check for Optic Camera  
+                    bool isOptic = (name.Contains("Optic", StringComparison.OrdinalIgnoreCase) ||
+                                   name.Contains("BaseOptic", StringComparison.OrdinalIgnoreCase)) &&
+                                  name.Contains("Camera", StringComparison.OrdinalIgnoreCase);
+
+                    if (isFPS)
+                    {
+                        fpsCamera = cameraPtr;
+                        if (verbose)
+                            Debug.WriteLine($"       ✓✓✓ MATCHED AS FPS CAMERA ✓✓✓");
+                    }
+                    
+                    if (isOptic)
+                    {
+                        opticCamera = cameraPtr;
+                        if (verbose)
+                            Debug.WriteLine($"       ✓✓✓ MATCHED AS OPTIC CAMERA ✓✓✓");
+                    }
+
+                    if (fpsCamera != 0 && opticCamera != 0)
+                    {
+                        if (verbose)
+                            Debug.WriteLine($"[CameraManager] Both cameras found! Stopping search at index {i}.");
+                        break;
+                    }
+                }
+                catch
+                {
+                    // Silently skip bad entries during retry loop
+                }
+            }
+
+            if (verbose)
+            {
+                Debug.WriteLine($"[CameraManager] Search Results:");
+                Debug.WriteLine($"  FPS Camera:   {(fpsCamera != 0 ? $"✓ Found @ 0x{fpsCamera:X}" : "✗ NOT FOUND")}");
+                Debug.WriteLine($"  Optic Camera: {(opticCamera != 0 ? $"✓ Found @ 0x{opticCamera:X}" : "✗ NOT FOUND")}");
+            }
+
+            return (fpsCamera, opticCamera);
+        }
 
         static CameraManager()
         {
             MemDMA.ProcessStarting += MemDMA_ProcessStarting;
             MemDMA.ProcessStopped += MemDMA_ProcessStopped;
+            MemDMA.RaidStopped += MemDMA_RaidStopped;
+            // No need for RaidStarted - we recreate the entire CameraManager per raid
         }
 
         private static void MemDMA_ProcessStarting(object sender, EventArgs e) { }
         private static void MemDMA_ProcessStopped(object sender, EventArgs e) { }
+        
+        private static void MemDMA_RaidStopped(object sender, EventArgs e)
+        {
+            // Clear static state when raid ends
+            Debug.WriteLine("[CameraManager] Raid stopped - clearing camera state");
+            var Identity = Matrix4x4.Identity;
+            _viewMatrix.Update(ref Identity);
+            EspRunning = false;
+        }
 
         private bool CheckIfScoped(LocalPlayer localPlayer)
         {
@@ -318,62 +645,116 @@ private static (ulong fpsCamera, ulong opticCamera) FindCamerasByName(ulong list
             }
         }
 
-public void OnRealtimeLoop(VmmScatter scatter, LocalPlayer localPlayer)
-{
-    try
-    {
-        IsADS = localPlayer?.CheckIfADS() ?? false;
-        IsScoped = IsADS && CheckIfScoped(localPlayer);
-
-        // Choose active matrix address
-        ulong activeMatrixAddress = (IsADS && IsScoped) ? _opticMatrixAddress : _fpsMatrixAddress;
-        ulong activeCamera = (IsADS && IsScoped) ? OpticCamera : FPSCamera;
-        ActiveCameraPtr = activeCamera;
-
-        // ✅ Prepare all reads (batched into single DMA operation)
-        scatter.PrepareReadValue<Matrix4x4>(activeMatrixAddress + 0x120);
-        scatter.PrepareReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_FOVOffset);
-        scatter.PrepareReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_AspectRatioOffset);
-        scatter.PrepareReadValue<float>(activeCamera + UnitySDK.UnityOffsets.Camera_ZoomLevelOffset);
-
-        // ✅ FIX: Use Completed event instead of Execute() here!
-        // This allows LocalGameWorld to Execute() once after all reads are prepared
-        scatter.Completed += (sender, s) =>
+        public void OnRealtimeLoop(VmmScatter scatter, LocalPlayer localPlayer)
         {
             try
             {
-                // Read results when scatter completes
-                if (s.ReadValue<Matrix4x4>(activeMatrixAddress + 0x120, out var vm))
+                IsADS = localPlayer?.CheckIfADS() ?? false;
+                IsScoped = IsADS && CheckIfScoped(localPlayer);
+
+                // Choose active matrix address
+                ulong activeMatrixAddress = (IsADS && IsScoped) ? _opticMatrixAddress : _fpsMatrixAddress;
+                ulong activeCamera = (IsADS && IsScoped) ? OpticCamera : FPSCamera;
+                ActiveCameraPtr = activeCamera;
+
+                // Prepare all reads (batched into single DMA operation)
+                scatter.PrepareReadValue<Matrix4x4>(activeMatrixAddress + 0x120);
+                scatter.PrepareReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_FOVOffset);
+                scatter.PrepareReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_AspectRatioOffset);
+                scatter.PrepareReadValue<float>(activeCamera + UnitySDK.UnityOffsets.Camera_ZoomLevelOffset);
+
+                scatter.Completed += (sender, s) =>
                 {
-                    _viewMatrix.Update(ref vm);
-                }
+                    try
+                    {
+                        bool matrixValid = false;
+                        
+                        // Read matrix and validate it
+                        if (s.ReadValue<Matrix4x4>(activeMatrixAddress + 0x120, out var vm))
+                        {
+                            if (ValidateCurrentMatrix(in vm))
+                            {
+                                // Check if matrix is stuck/frozen
+                                bool isChanging = IsMatrixChanging(in vm);
+                                
+                                // Check if we should reset due to stuck matrix
+                                if (ShouldResetDueToStuckMatrix())
+                                {
+                                    Debug.WriteLine("[CameraManager] Resetting due to stuck/frozen matrix (likely raid ended)");
+                                    ResetMatrixAddresses();
+                                }
+                                else
+                                {
+                                    _viewMatrix.Update(ref vm);
+                                    matrixValid = true;
+                                    _consecutiveMatrixFailures = 0;
+                                    _lastValidMatrix = DateTime.UtcNow;
+                                    
+                                    if (!_matrixInitialized)
+                                    {
+                                        _matrixInitialized = true;
+                                        _lastMatrix = vm;
+                                        _lastMatrixChange = DateTime.UtcNow;
+                                        Debug.WriteLine("[CameraManager] ✓ Matrix validated for first time");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                _consecutiveMatrixFailures++;
+                                
+                                // Only log occasionally to avoid spam
+                                if (_consecutiveMatrixFailures % 10 == 0)
+                                {
+                                    Debug.WriteLine($"[CameraManager] Invalid matrix data detected ({_consecutiveMatrixFailures} consecutive failures)");
+                                }
+                                
+                                // Check if we need to reset
+                                if (_consecutiveMatrixFailures >= MAX_MATRIX_FAILURES_BEFORE_RESET)
+                                {
+                                    Debug.WriteLine($"[CameraManager] Too many consecutive matrix failures, attempting reset...");
+                                    ResetMatrixAddresses();
+                                }
+                            }
+                        }
+                        else
+                        {
+                            _consecutiveMatrixFailures++;
+                        }
 
-                if (s.ReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_FOVOffset, out var fov))
-                    _fov = fov;
+                        // Read other camera properties (even if matrix is invalid, we still want these)
+                        if (s.ReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_FOVOffset, out var fov))
+                            _fov = fov;
 
-                if (s.ReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_AspectRatioOffset, out var aspect))
-                    _aspect = aspect;
+                        if (s.ReadValue<float>(FPSCamera + UnitySDK.UnityOffsets.Camera_AspectRatioOffset, out var aspect))
+                            _aspect = aspect;
 
-                if (s.ReadValue<float>(activeCamera + UnitySDK.UnityOffsets.Camera_ZoomLevelOffset, out var zoom))
-                    _zoomLevel = zoom;
+                        if (s.ReadValue<float>(activeCamera + UnitySDK.UnityOffsets.Camera_ZoomLevelOffset, out var zoom))
+                            _zoomLevel = zoom;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"ERROR in CameraManager scatter callback: {ex}");
+                    }
+                };
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"ERROR in CameraManager scatter callback: {ex}");
+                Debug.WriteLine($"ERROR in CameraManager OnRealtimeLoop: {ex}");
             }
-        };
-    }
-    catch (Exception ex)
-    {
-        Debug.WriteLine($"ERROR in CameraManager OnRealtimeLoop: {ex}");
-    }
-}
+        }
 
-// Add field at top of class
-private static float _zoomLevel = 1.0f;
+        // Add field at top of class
+        private static float _zoomLevel = 1.0f;
 
-// Add public property
-public static float ZoomLevel => _zoomLevel;
+        // Add public property
+        public static float ZoomLevel => _zoomLevel;
+
+        /// <summary>
+        /// Check if camera manager is ready to use (matrices initialized with valid data)
+        /// </summary>
+        public bool IsInitialized => _matrixInitialized && 
+                                     (DateTime.UtcNow - _lastValidMatrix).TotalSeconds < 5.0;
 
         #region SightComponent Structures
 
@@ -446,87 +827,84 @@ public static float ZoomLevel => _zoomLevel;
         private static float _aspect;
         private static readonly ViewMatrix _viewMatrix = new();
 
-public static void UpdateViewportRes()
-{
-    lock (_viewportSync)
-    {
-        // ✅ FIX: Use actual configured resolution instead of hardcoded 1080p
-        var width = (int)App.Config.ESP.Resolution.Width;
-        var height = (int)App.Config.ESP.Resolution.Height;
-        
-        // Fallback to 1080p if invalid
-        if (width <= 0 || height <= 0)
+        public static void UpdateViewportRes()
         {
-            width = 1920;
-            height = 1080;
-        }
-        
-        Viewport = new Rectangle(0, 0, width, height);
-        Debug.WriteLine($"[CameraManager] Viewport updated to {width}x{height}");
-    }
-}
-
-public static bool WorldToScreen(
-    ref readonly Vector3 worldPos,
-    out SKPoint scrPos,
-    bool onScreenCheck = false,
-    bool useTolerance = false)
-{
-    try
-    {
-        float w = Vector3.Dot(_viewMatrix.Translation, worldPos) + _viewMatrix.M44;
-
-        if (w < 0.098f)
-        {
-            scrPos = default;
-            return false;
-        }
-
-        float x = Vector3.Dot(_viewMatrix.Right, worldPos) + _viewMatrix.M14;
-        float y = Vector3.Dot(_viewMatrix.Up, worldPos) + _viewMatrix.M24;
-
-        // ✅ FIX: Only use FOV-based calculation when scoped, ignore zoom level
-        if (IsScoped)
-        {
-            float angleRadHalf = (MathF.PI / 180f) * _fov * 0.5f;
-            float angleCtg = MathF.Cos(angleRadHalf) / MathF.Sin(angleRadHalf);
-
-            x /= angleCtg * _aspect * 0.5f;
-            y /= angleCtg * 0.5f;
-            
-            // DON'T multiply by _zoomLevel - FOV already handles zoom!
-        }
-
-        var center = ViewportCenter;
-        scrPos = new()
-        {
-            X = center.X * (1f + x / w),
-            Y = center.Y * (1f - y / w)
-        };
-
-        if (onScreenCheck)
-        {
-            int left = useTolerance ? Viewport.Left - VIEWPORT_TOLERANCE : Viewport.Left;
-            int right = useTolerance ? Viewport.Right + VIEWPORT_TOLERANCE : Viewport.Right;
-            int top = useTolerance ? Viewport.Top - VIEWPORT_TOLERANCE : Viewport.Top;
-            int bottom = useTolerance ? Viewport.Bottom + VIEWPORT_TOLERANCE : Viewport.Bottom;
-
-            if (scrPos.X < left || scrPos.X > right || scrPos.Y < top || scrPos.Y > bottom)
+            lock (_viewportSync)
             {
+                var width = (int)App.Config.ESP.Resolution.Width;
+                var height = (int)App.Config.ESP.Resolution.Height;
+                
+                // Fallback to 1080p if invalid
+                if (width <= 0 || height <= 0)
+                {
+                    width = 1920;
+                    height = 1080;
+                }
+                
+                Viewport = new Rectangle(0, 0, width, height);
+                Debug.WriteLine($"[CameraManager] Viewport updated to {width}x{height}");
+            }
+        }
+
+        public static bool WorldToScreen(
+            ref readonly Vector3 worldPos,
+            out SKPoint scrPos,
+            bool onScreenCheck = false,
+            bool useTolerance = false)
+        {
+            try
+            {
+                float w = Vector3.Dot(_viewMatrix.Translation, worldPos) + _viewMatrix.M44;
+
+                if (w < 0.098f)
+                {
+                    scrPos = default;
+                    return false;
+                }
+
+                float x = Vector3.Dot(_viewMatrix.Right, worldPos) + _viewMatrix.M14;
+                float y = Vector3.Dot(_viewMatrix.Up, worldPos) + _viewMatrix.M24;
+
+                // Only use FOV-based calculation when scoped
+                if (IsScoped)
+                {
+                    float angleRadHalf = (MathF.PI / 180f) * _fov * 0.5f;
+                    float angleCtg = MathF.Cos(angleRadHalf) / MathF.Sin(angleRadHalf);
+
+                    x /= angleCtg * _aspect * 0.5f;
+                    y /= angleCtg * 0.5f;
+                }
+
+                var center = ViewportCenter;
+                scrPos = new()
+                {
+                    X = center.X * (1f + x / w),
+                    Y = center.Y * (1f - y / w)
+                };
+
+                if (onScreenCheck)
+                {
+                    int left = useTolerance ? Viewport.Left - VIEWPORT_TOLERANCE : Viewport.Left;
+                    int right = useTolerance ? Viewport.Right + VIEWPORT_TOLERANCE : Viewport.Right;
+                    int top = useTolerance ? Viewport.Top - VIEWPORT_TOLERANCE : Viewport.Top;
+                    int bottom = useTolerance ? Viewport.Bottom + VIEWPORT_TOLERANCE : Viewport.Bottom;
+
+                    if (scrPos.X < left || scrPos.X > right || scrPos.Y < top || scrPos.Y > bottom)
+                    {
+                        scrPos = default;
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"ERROR in WorldToScreen: {ex}");
                 scrPos = default;
                 return false;
             }
         }
-
-        return true;
-    }
-    catch (Exception ex)
-    {
-        Debug.WriteLine($"ERROR in WorldToScreen: {ex}");
-        scrPos = default;
-        return false;
-    }
-}
 
         public static CameraDebugSnapshot GetDebugSnapshot()
         {
@@ -582,11 +960,7 @@ public static bool WorldToScreen(
             public int ViewportW { get; init; }
             public int ViewportH { get; init; }
         }
-        /// <summary>
-        /// Returns the FOV Magnitude (Length) between a point, and the center of the screen.
-        /// </summary>
-        /// <param name="point">Screen point to calculate FOV Magnitude of.</param>
-        /// <returns>Screen distance from the middle of the screen (FOV Magnitude).</returns>
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float GetFovMagnitude(SKPoint point)
         {

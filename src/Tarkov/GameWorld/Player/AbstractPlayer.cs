@@ -487,82 +487,142 @@ namespace LoneEftDmaRadar.Tarkov.GameWorld.Player
 
         /// <summary>
         /// Executed on each Realtime Loop.
+        /// Updated to better validate vertices and handle skeleton separately
         /// </summary>
-        /// <param name="index">Scatter read index dedicated to this player.</param>
-internal DateTime NextSkeletonRetryUtc = DateTime.MinValue;
-public virtual void OnRealtimeLoop(VmmScatter scatter)
-{
-    // ✅ Early validation
-    if (SkeletonRoot == null)
-    {
-        Debug.WriteLine($"WARNING: SkeletonRoot is null for player '{Name}'");
-        IsError = true;
-        return;
-    }
-
-    // Read enough vertices to cover all bones in the skeleton
-    int vertexCount = Skeleton != null ? Skeleton.MaxBoneIndex + 1 : SkeletonRoot.Count;
-
-    // ✅ Validate vertex count
-    if (vertexCount <= 0 || vertexCount > 10000)
-    {
-        Debug.WriteLine($"WARNING: Invalid vertex count {vertexCount} for player '{Name}'");
-        IsError = true;
-        return;
-    }
-
-    scatter.PrepareReadValue<Vector2>(RotationAddress);
-    scatter.PrepareReadArray<TrsX>(SkeletonRoot.VerticesAddr, vertexCount);
-
-    scatter.Completed += (sender, s) =>
-    {
-        bool successRot = s.ReadValue<Vector2>(RotationAddress, out var rotation) && SetRotation(rotation);
-        bool successPos = true;
-
-        if (s.ReadArray<TrsX>(SkeletonRoot.VerticesAddr, vertexCount) is PooledMemory<TrsX> vertices)
+        public virtual void OnRealtimeLoop(VmmScatter scatter)
         {
-            using (vertices)
+            // ✅ Early validation - SkeletonRoot is ALWAYS needed for position
+            if (SkeletonRoot == null)
             {
-                try
+                Debug.WriteLine($"WARNING: SkeletonRoot is null for player '{Name}'");
+                IsError = true;
+                return;
+            }
+        
+            // Calculate how many vertices we need
+            // - SkeletonRoot always needs vertices (for position updates)
+            // - Skeleton (if present) also needs vertices (for bone updates)
+            // They SHARE the same vertex buffer, so we read the max needed
+            int vertexCount = SkeletonRoot.Count; // Minimum needed for root position
+            
+            if (Skeleton != null)
+            {
+                // Skeleton bones may need more vertices than just the root
+                int skeletonMax = Skeleton.MaxBoneIndex + 1;
+                if (skeletonMax > vertexCount)
+                    vertexCount = skeletonMax;
+            }
+        
+            // ✅ Validate vertex count
+            if (vertexCount <= 0 || vertexCount > 10000)
+            {
+                Debug.WriteLine($"WARNING: Invalid vertex count {vertexCount} for player '{Name}'");
+                IsError = true;
+                return;
+            }
+        
+            // Schedule reads
+            scatter.PrepareReadValue<Vector2>(RotationAddress);
+            scatter.PrepareReadArray<TrsX>(SkeletonRoot.VerticesAddr, vertexCount);
+        
+            scatter.Completed += (sender, s) =>
+            {
+                bool successRot = s.ReadValue<Vector2>(RotationAddress, out var rotation) && SetRotation(rotation);
+                bool successPos = false;
+        
+                if (s.ReadArray<TrsX>(SkeletonRoot.VerticesAddr, vertexCount) is PooledMemory<TrsX> vertices)
                 {
-                    // ✅ Validate vertices span
-                    if (vertices.Span.Length < vertexCount)
+                    using (vertices)
                     {
-                        Debug.WriteLine($"WARNING: Read {vertices.Span.Length} vertices but expected {vertexCount} for player '{Name}'");
-                        successPos = false;
-                    }
-                    else
-                    {
-                        // Update root position
-                        _ = SkeletonRoot.UpdatePosition(vertices.Span);
-
-                        // Cache vertices for skeleton bones - ALL bones share the same vertices buffer!
-                        if (Skeleton != null)
+                        try
                         {
-                            Skeleton.CacheVertices(vertices.Span);
+                            // ✅ Validate vertices span
+                            if (vertices.Span.Length < vertexCount)
+                            {
+                                Debug.WriteLine($"WARNING: Read {vertices.Span.Length} vertices but expected {vertexCount} for player '{Name}'");
+                            }
+                            else
+                            {
+                                // ✅ Validate vertex data quality before using
+                                bool hasValidData = false;
+                                for (int i = 0; i < Math.Min(3, vertices.Span.Length); i++)
+                                {
+                                    var pos = vertices.Span[i].t; // Use 't' field for translation/position
+                                    if (!float.IsNaN(pos.X) && !float.IsNaN(pos.Y) && !float.IsNaN(pos.Z) &&
+                                        !float.IsInfinity(pos.X) && !float.IsInfinity(pos.Y) && !float.IsInfinity(pos.Z) &&
+                                        Math.Abs(pos.X) < 10000 && Math.Abs(pos.Y) < 10000 && Math.Abs(pos.Z) < 10000)
+                                    {
+                                        hasValidData = true;
+                                        break;
+                                    }
+                                }
+        
+                                if (!hasValidData)
+                                {
+                                    Debug.WriteLine($"WARNING: Invalid vertex data for player '{Name}' - skipping update");
+                                }
+                                else
+                                {
+                                    // Update root position (ALWAYS needed)
+                                    // UpdatePosition returns ref Vector3, not bool
+                                    try
+                                    {
+                                        _ = SkeletonRoot.UpdatePosition(vertices.Span);
+                                        var pos = SkeletonRoot.Position;
+                                        
+                                        // Validate the result
+                                        if (!float.IsNaN(pos.X) && !float.IsNaN(pos.Y) && !float.IsNaN(pos.Z) &&
+                                            !float.IsInfinity(pos.X) && !float.IsInfinity(pos.Y) && !float.IsInfinity(pos.Z))
+                                        {
+                                            successPos = true;
+                                        }
+                                        else
+                                        {
+                                            Debug.WriteLine($"WARNING: Invalid position result for player '{Name}'");
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Debug.WriteLine($"ERROR updating SkeletonRoot position for '{Name}': {ex}");
+                                        successPos = false;
+                                    }
+        
+                                    // Cache vertices for skeleton bones (if skeleton exists)
+                                    // This is SEPARATE from position updates - skeleton can be null
+                                    // but position updates still work
+                                    if (Skeleton != null && successPos)
+                                    {
+                                        bool successSkeleton = Skeleton.CacheVertices(vertices.Span);
+                                        
+                                        if (!successSkeleton)
+                                        {
+                                            // Only log occasionally to avoid spam during loading
+                                            if (DateTime.UtcNow.Second % 5 == 0)
+                                            {
+                                                Debug.WriteLine($"INFO: Skeleton vertices not yet valid for '{Name}' (normal during load)");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"ERROR processing vertices for Player '{Name}': {ex}");
                         }
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    Debug.WriteLine($"ERROR getting Player '{Name}' Position: {ex}");
-                    successPos = false;
+                    Debug.WriteLine($"WARNING: Failed to read vertices for player '{Name}'");
                 }
-            }
-        }
-        else
-        {
-            Debug.WriteLine($"WARNING: Failed to read vertices for player '{Name}'");
-            successPos = false;
+        
+                // IsError is set if critical data (position/rotation) failed
+                // Skeleton failures are tracked separately within the Skeleton class
+                IsError = !successRot || !successPos;
+            };
         }
 
-        IsError = !successRot || !successPos;
-    };
-}
-public virtual void EnsureSkeletonInitialized()
-{
-    // default: do nothing
-}
         /// <summary>
         /// Executed on each Transform Validation Loop.
         /// </summary>

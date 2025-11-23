@@ -164,10 +164,10 @@
                            Margin="8,8,8,8">
                     1. Connect your Makcu device using the dropdown above<LineBreak />
                     2. Enable the aimbot with the checkbox<LineBreak />
-                    3. Hold a configured mouse button (set on Makcu) to activate<LineBreak />
+                    3. Hold a configured mouse button (set it in SettingsTab.Hotkeys) to activate<LineBreak />
                     4. The aimbot will automatically target enemies within FOV<LineBreak />
                     <LineBreak />
-                    Note: Memory write features (No Recoil, etc.) are now in the "MemWrites" tab.<LineBreak />
+                    Note: You can enable Silentaimbot (Uses Memory Write) in MemWrites tab, it will use the same hotkey and all settings from here. Silent Aim Does not aim for you, it tells bullets where to go your gun won't move to the target bone, your bullets will.<LineBreak />
                     <LineBreak />
                     Make sure your Makcu firmware is up to date.
                 </TextBlock>

@@ -495,90 +495,74 @@ private bool ShouldTargetPlayer(AbstractPlayer player, LocalPlayer localPlayer)
                 Debug.WriteLine($"[MakcuAimbot] Aiming at target {target.Name}: Move({moveX}, {moveY})");
             }
         }
-private void ApplyMemoryAim(LocalPlayer localPlayer, Vector3 targetPosition)
-{
-    try
-    {
-        var firearmManager = localPlayer.FirearmManager;
-        if (firearmManager == null)
-            return;
-
-        var fireportPos = firearmManager.FireportPosition;
-        if (!fireportPos.HasValue || fireportPos.Value == Vector3.Zero)
-            return;
-
-        var fpPos = fireportPos.Value;
-
-        // 1) Desired angle (same CalcAngle as old cheat)
-        Vector2 aimAngle = CalcAngle(fpPos, targetPosition);
-
-        // 2) Current view angles from MovementContext._rotation (NEW OFFSET)
-        ulong movementContext = localPlayer.MovementContext;
-        Vector2 viewAngles = Memory.ReadValue<Vector2>(
-            movementContext + Offsets.MovementContext._rotation, // 0xC4 in your dump
-            false
-        );
-
-        // 3) Delta and normalization (same as old)
-        Vector2 delta = aimAngle - viewAngles;
-        NormalizeAngle(ref delta);
-
-        // 4) Gun angle mapping (identical to old ApplySilentAim)
-        Vector3 gunAngle = new Vector3(
-            DegToRad(delta.X) / 1.5f,
-            0.0f,
-            DegToRad(delta.Y) / 1.5f
-        );
-
-        // 5) Write to _shotDirection (same as old 0x22C)
-        ulong shotDirectionAddr = localPlayer.PWA + Offsets.ProceduralWeaponAnimation._shotDirection;
-        if (!MemDMA.IsValidVirtualAddress(shotDirectionAddr))
-            return;
-
-        // Keep the exact weird mapping you had before
-        Vector3 writeVec = new Vector3(gunAngle.X, -1.0f, gunAngle.Z * -1.0f);
-        Memory.WriteValue(shotDirectionAddr, writeVec);
-
-        Debug.WriteLine($"[MemoryAim] Fireport: {fpPos}");
-        Debug.WriteLine($"[MemoryAim] Target:   {targetPosition}");
-        Debug.WriteLine($"[MemoryAim] AimAngle: {aimAngle}, ViewAngles: {viewAngles}, жд={delta}");
-        Debug.WriteLine($"[MemoryAim] WriteVec: {writeVec}");
-    }
-    catch (Exception ex)
-    {
-        Debug.WriteLine($"[MemoryAim] Error: {ex}");
-    }
-}
-
-
-private static Vector2 CalcAngle(Vector3 from, Vector3 to)
-{
-    Vector3 delta = from - to;
-    float length = delta.Length();
-
-    return new Vector2(
-        RadToDeg((float)-Math.Atan2(delta.X, -delta.Z)),
-        RadToDeg((float)Math.Asin(delta.Y / length))
-    );
-}
-
-private static void NormalizeAngle(ref Vector2 angle)
-{
-    NormalizeAngle(ref angle.X);
-    NormalizeAngle(ref angle.Y);
-}
-
-private static void NormalizeAngle(ref float angle)
-{
-    while (angle > 180.0f) angle -= 360.0f;
-    while (angle < -180.0f) angle += 360.0f;
-}
-
-private static float DegToRad(float degrees)
-    => degrees * ((float)Math.PI / 180.0f);
-
-private static float RadToDeg(float radians)
-    => radians * (180.0f / (float)Math.PI);
+        private void ApplyMemoryAim(LocalPlayer localPlayer, Vector3 targetPosition)
+        {
+            try
+            {
+                var firearmManager = localPlayer.FirearmManager;
+                if (firearmManager == null)
+                    return;
+        
+                var fireportPos = firearmManager.FireportPosition;
+                if (!fireportPos.HasValue || fireportPos.Value == Vector3.Zero)
+                    return;
+        
+                var fpPos = fireportPos.Value;
+                Vector2 aimAngle = CalcAngle(fpPos, targetPosition);
+                ulong movementContext = localPlayer.MovementContext;
+                Vector2 viewAngles = Memory.ReadValue<Vector2>(
+                    movementContext + Offsets.MovementContext._rotation,
+                    false
+                );
+                Vector2 delta = aimAngle - viewAngles;
+                NormalizeAngle(ref delta);
+                Vector3 gunAngle = new Vector3(
+                    DegToRad(delta.X) / 1.5f,
+                    0.0f,
+                    DegToRad(delta.Y) / 1.5f
+                );
+                ulong shotDirectionAddr = localPlayer.PWA + Offsets.ProceduralWeaponAnimation._shotDirection;
+                if (!MemDMA.IsValidVirtualAddress(shotDirectionAddr))
+                    return;
+        
+                Vector3 writeVec = new Vector3(gunAngle.X, -1.0f, gunAngle.Z * -1.0f);
+                Memory.WriteValue(shotDirectionAddr, writeVec);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MemoryAim] Error: {ex}");
+            }
+        }
+        
+        
+        private static Vector2 CalcAngle(Vector3 from, Vector3 to)
+        {
+            Vector3 delta = from - to;
+            float length = delta.Length();
+        
+            return new Vector2(
+                RadToDeg((float)-Math.Atan2(delta.X, -delta.Z)),
+                RadToDeg((float)Math.Asin(delta.Y / length))
+            );
+        }
+        
+        private static void NormalizeAngle(ref Vector2 angle)
+        {
+            NormalizeAngle(ref angle.X);
+            NormalizeAngle(ref angle.Y);
+        }
+        
+        private static void NormalizeAngle(ref float angle)
+        {
+            while (angle > 180.0f) angle -= 360.0f;
+            while (angle < -180.0f) angle += 360.0f;
+        }
+        
+        private static float DegToRad(float degrees)
+            => degrees * ((float)Math.PI / 180.0f);
+        
+        private static float RadToDeg(float radians)
+            => radians * (180.0f / (float)Math.PI);
 
         private Vector3 PredictHitPoint(LocalPlayer localPlayer, AbstractPlayer target, Vector3 fireportPos, Vector3 targetPos)
         {

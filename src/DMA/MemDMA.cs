@@ -227,159 +227,98 @@ namespace LoneEftDmaRadar.DMA
         /// Starts up the Game Process and all mandatory modules.
         /// Returns to caller when the Game is ready.
         /// </summary>
-// Add field at top of MemDMA class
-private Thread _cameraThread;
-private volatile bool _cameraThreadRunning;
-
-// In RunStartupLoop, after CameraManager initialization:
-private void RunStartupLoop()
-{
-    Debug.WriteLine("New Process Startup");
-    while (true)
-    {
-        try
+        private void RunStartupLoop()
         {
-            _vmm.ForceFullRefresh();
-            ResourceJanitor.Run();
-            LoadProcess();
-            LoadModules();
-            this.Starting = true;
-            OnProcessStarting();
-            try
+            Debug.WriteLine("New Process Startup");
+            while (true)
             {
-                _cameraManager = new CameraManager();
-                MemDMA.CameraManager = _cameraManager;
-                CameraManager.UpdateViewportRes();
-                Debug.WriteLine("CameraManager initialized successfully!");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"ERROR initializing CameraManager: {ex}");
-            }
-            this.Ready = true;
-            Debug.WriteLine("Process Startup [OK]");
-            break;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Process Startup [FAIL]: {ex}");
-            OnProcessStopped();
-            Thread.Sleep(1000);
-        }
-    }
-}
-
-// In RunGameLoop, start camera thread when raid starts:
-private void RunGameLoop()
-{
-    while (true)
-    {
-        try
-        {
-            var ct = Restart;
-            using (var game = Game = LocalGameWorld.CreateGameInstance(ct))
-            {
-                OnRaidStarted();
-                
-                game.Start();
-                while (game.InRaid)
+                try
                 {
-                    ct.ThrowIfCancellationRequested();
-                    game.Refresh();
-                    Thread.Sleep(133); // Game loop at 60Hz
+                    _vmm.ForceFullRefresh();
+                    ResourceJanitor.Run();
+                    LoadProcess();
+                    LoadModules();
+                    this.Starting = true;
+                    OnProcessStarting();
+
+                    // ✅ DON'T create CameraManager here - do it per-raid instead
+
+                    this.Ready = true;
+                    Debug.WriteLine("Process Startup [OK]");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Process Startup [FAIL]: {ex}");
+                    OnProcessStopped();
+                    Thread.Sleep(1000);
                 }
             }
         }
-        catch (OperationCanceledException ex)
-        {
-            Debug.WriteLine(ex.Message);
-            continue;
-        }
-        catch (ProcessNotRunningException ex)
-        {
-            Debug.WriteLine(ex.Message);
-            break;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Unhandled Exception in Game Loop: {ex}");
-            break;
-        }
-        finally
-        {
-            // ✅ REMOVED: StopCameraThread() - no longer needed!
-            
-            OnRaidStopped();
-            Thread.Sleep(100);
-        }
-    }
-}
-
-[DllImport("kernel32.dll")]
-private static extern IntPtr GetCurrentThread();
-
-[DllImport("kernel32.dll")]
-private static extern bool SetThreadPriority(IntPtr hThread, int nPriority);
-
-private const int THREAD_PRIORITY_TIME_CRITICAL = 15;
-
-private void StartCameraThread()
-{
-    _cameraThreadRunning = true;
-    _cameraThread = new Thread(() =>
-    {
-        Debug.WriteLine("[Camera] High-frequency thread started (1000Hz)");
         
-        // ✅ Set to time-critical priority for immediate scheduling
-        try
+        /// <summary>
+        /// Main game loop - creates new CameraManager for each raid
+        /// </summary>
+        private void RunGameLoop()
         {
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-            Debug.WriteLine("[Camera] Thread priority set to TIME_CRITICAL");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Camera] Failed to set thread priority: {ex}");
-        }
-        
-        while (_cameraThreadRunning && Ready && InRaid)
-        {
-            try
+            while (true)
             {
-                var lp = LocalPlayer;
-                if (lp != null && _cameraManager != null)
+                try
                 {
-                    // ✅ NOCACHE ensures fresh data every time
-                    using var scatter = CreateScatter(VmmFlags.NOCACHE);
-                    _cameraManager.OnRealtimeLoop(scatter, lp);
-                    // Execute() is called inside OnRealtimeLoop now (synchronous)
+                    var ct = Restart;
+                    
+                    // ✅ Create CameraManager for THIS raid (cameras are different per raid!)
+                    // Note: CameraManager now initializes in background thread, so this returns immediately
+                    Debug.WriteLine("[MemDMA] Creating CameraManager for new raid...");
+                    _cameraManager = new CameraManager();
+                    MemDMA.CameraManager = _cameraManager;
+                    CameraManager.UpdateViewportRes();
+                    Debug.WriteLine("[MemDMA] CameraManager created (will initialize cameras in background)");
+                    
+                    using (var game = Game = LocalGameWorld.CreateGameInstance(ct))
+                    {
+                        OnRaidStarted();
+                        
+                        game.Start();
+                        while (game.InRaid)
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            game.Refresh();
+                            Thread.Sleep(133); // Game loop at 60Hz
+                        }
+                    }
                 }
-                
-                // ✅ 1ms = 1000Hz update rate
-                Thread.Sleep(1);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[Camera] Update error: {ex.Message}");
-                Thread.Sleep(50);
+                catch (OperationCanceledException ex)
+                {
+                    Debug.WriteLine(ex.Message);
+                    continue;
+                }
+                catch (ProcessNotRunningException ex)
+                {
+                    Debug.WriteLine(ex.Message);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Unhandled Exception in Game Loop: {ex}");
+                    break;
+                }
+                finally
+                {            
+                    OnRaidStopped();
+                    
+                    // ✅ Cleanup camera manager when raid ends
+                    if (_cameraManager != null)
+                    {
+                        Debug.WriteLine("[MemDMA] Cleaning up CameraManager for ended raid");
+                        _cameraManager = null;
+                        MemDMA.CameraManager = null;
+                    }
+                    
+                    Thread.Sleep(100);
+                }
             }
         }
-        
-        Debug.WriteLine("[Camera] High-frequency thread stopped");
-    })
-    {
-        IsBackground = true,
-        Priority = ThreadPriority.Highest, // .NET priority
-        Name = "CameraHighFreqThread"
-    };
-    
-    _cameraThread.Start();
-}
-
-private void StopCameraThread()
-{
-    _cameraThreadRunning = false;
-    _cameraThread = null;
-}
 
         /// <summary>
         /// Raised when the game is stopped.
@@ -394,7 +333,6 @@ private void StopCameraThread()
             UnityBase = default;
             GOM = default;
             _pid = default;
-            StopCameraThread();
 
             _makcuAimbot?.Dispose();
             _makcuAimbot = null;
