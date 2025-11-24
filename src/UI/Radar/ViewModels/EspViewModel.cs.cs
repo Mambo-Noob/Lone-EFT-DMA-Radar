@@ -87,6 +87,24 @@ namespace LoneEftDmaRadar.UI.Radar.ViewModels
             set { App.Config.ESP.ShowDebug = value; OnPropertyChanged(); }
         }
 
+        public bool ChromaKeyTransparency
+        {
+            get => App.Config.ESP.ChromaKeyTransparency;
+            set
+            {
+                App.Config.ESP.ChromaKeyTransparency = value;
+                OnPropertyChanged();
+
+                // Refresh the ESP window if it's open (close and reopen)
+                if (_espWindow != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Refreshing ESP window for chroma key transparency: {value}");
+                    CloseEsp();
+                    OpenEsp();
+                }
+            }
+        }
+
         // Players - Display Options
         public bool ShowPlayers
         {
