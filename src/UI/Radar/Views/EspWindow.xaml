@@ -4,9 +4,9 @@
         xmlns:skia="clr-namespace:SkiaSharp.Views.WPF;assembly=SkiaSharp.Views.WPF"
         Title="ESP Overlay"
         ResizeMode="NoResize"
-        AllowsTransparency="False"
+        AllowsTransparency="True"
         WindowStyle="None"
-        Background="Transparent"
+        Background="Black"
         Topmost="True"
         ShowInTaskbar="False"
         Left="0"
@@ -14,7 +14,7 @@
         Loaded="Window_Loaded"
         Closing="Window_Closing">
     
-    <Grid Background="Transparent">
+    <Grid Background="Black">
         <skia:SKGLElement x:Name="skiaCanvas"
                           PaintSurface="SkiaCanvas_PaintSurface" />
     </Grid>

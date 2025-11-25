@@ -216,8 +216,21 @@ private void Window_Loaded(object sender, RoutedEventArgs e)
         if (hwnd != IntPtr.Zero)
         {
             int extendedStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
-            SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT | WS_EX_LAYERED);
-            System.Diagnostics.Debug.WriteLine("Set window style to transparent/layered");
+
+            // Make black color (RGB 0,0,0) transparent using chroma key if enabled
+            if (App.Config.ESP.ChromaKeyTransparency)
+            {
+                SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT | WS_EX_LAYERED);
+                uint blackColor = 0x00000000; // Black in BGR format (0x00BBGGRR)
+                SetLayeredWindowAttributes(hwnd, blackColor, 255, LWA_COLORKEY);
+                System.Diagnostics.Debug.WriteLine("Set window style to transparent/layered with black chroma key");
+            }
+            else
+            {
+                // Click-through but not layered - no transparency effect
+                SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT);
+                System.Diagnostics.Debug.WriteLine("Set window style to click-through (chroma key disabled)");
+            }
         }
 
         CameraManager.EspRunning = true;
@@ -293,7 +306,7 @@ private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs
         private void SkiaCanvas_PaintSurface(object sender, SKPaintGLSurfaceEventArgs e)
         {
             var canvas = e.Surface.Canvas;
-            canvas.Clear(SKColors.Transparent);
+            canvas.Clear(SKColors.Black);
 
             bool inRaid = Memory.InRaid;
             var localPlayer = Memory.LocalPlayer;
@@ -530,10 +543,10 @@ private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs
             float width = height * 0.45f;
 
             // Shift top up a bit so it actually covers the top of the head
-            // (head bone ~middle of skull ¡ú push ~15% of height upwards).
+            // (head bone ~middle of skull ï¿½ï¿½ push ~15% of height upwards).
             float top = headScreen.Y - height * 0.15f;
 
-            // Optional: tiny padding at bottom so feet aren¡¯t exactly at the border
+            // Optional: tiny padding at bottom so feet arenï¿½ï¿½t exactly at the border
             float bottom = footScreen.Y + height * 0.05f;
 
             boxRect = new SKRect(
@@ -796,17 +809,48 @@ private void DrawPlayer(SKCanvas canvas, AbstractPlayer player, LocalPlayer loca
 
         #endregion
 
+        #region Public Methods
+
+        public void UpdateChromaKeyTransparency(bool enabled)
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == IntPtr.Zero)
+                return;
+
+            int extendedStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+
+            if (enabled)
+            {
+                SetWindowLong(hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT | WS_EX_LAYERED);
+                uint blackColor = 0x00000000;
+                SetLayeredWindowAttributes(hwnd, blackColor, 255, LWA_COLORKEY);
+                System.Diagnostics.Debug.WriteLine("Updated window style: chroma key enabled");
+            }
+            else
+            {
+                // Remove WS_EX_LAYERED flag to disable transparency
+                SetWindowLong(hwnd, GWL_EXSTYLE, (extendedStyle | WS_EX_TRANSPARENT) & ~WS_EX_LAYERED);
+                System.Diagnostics.Debug.WriteLine("Updated window style: chroma key disabled");
+            }
+        }
+
+        #endregion
+
         #region Win32 Interop
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int WS_EX_LAYERED = 0x00080000;
+        private const uint LWA_COLORKEY = 0x00000001;
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hwnd, int index);
 
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
 
         #endregion
     }

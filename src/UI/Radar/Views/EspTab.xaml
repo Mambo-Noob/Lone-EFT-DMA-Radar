@@ -32,12 +32,16 @@
                     <CheckBox Content="Show Debug Info"
                               IsChecked="{Binding ShowDebug, Mode=TwoWay}"
                               Margin="8,4,8,4" />
-                    
-                    <TextBlock TextWrapping="Wrap" 
+
+                    <CheckBox Content="Enable Chroma Key Transparency (Black = Transparent)"
+                              IsChecked="{Binding ChromaKeyTransparency, Mode=TwoWay}"
+                              Margin="8,4,8,4" />
+
+                    <TextBlock TextWrapping="Wrap"
                                Margin="8,12,8,8"
                                Foreground="Gray">
-                        The ESP window appears as a transparent overlay.<LineBreak />
-                        Position it over your game window for in-game visualization.
+                        <Bold>Chroma Key Transparency:</Bold> Makes black pixels transparent, showing only ESP elements.<LineBreak />
+                        More useful for single PC DMA setups where the ESP overlay appears directly on the game screen.
                     </TextBlock>
                 </StackPanel>
             </GroupBox>

@@ -495,6 +495,7 @@ namespace LoneEftDmaRadar
 
         // General
         public bool ShowDebug { get; set; } = false;
+        public bool ChromaKeyTransparency { get; set; } = false;
 
         // Players
         public bool ShowPlayers { get; set; } = true;
