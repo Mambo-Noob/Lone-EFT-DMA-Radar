@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Lone EFT DMA Radar
  * Brought to you by Lone (Lone DMA)
  * 
@@ -29,37 +29,35 @@ namespace LoneEftDmaRadar.Tarkov.Unity
     {
         public readonly struct UnityOffsets
         {
-            // Module Base
-            public const uint GameObjectManager = 0x1A1F0B8;
-            public const uint AllCameras = 0x19EE040; // Lookup in IDA 's_AllCamera'
-            public const uint PhysiX = 0x1ACD770; // g_PhysiX
+            public const uint GameObjectManager = 0x1A21378;
+            public const uint AllCameras = 0x19F0040;
+            //public const uint PhysiX = 0x1ACD770;
+
             public const uint GameObject_ObjectClassOffset = 0x80;
-            public const uint GameObject_ComponentsOffset = 0x50;
-            public const uint GameObject_NameOffset = 0x80;
+            public const uint GameObject_ComponentsOffset = 0x58;
+            public const uint GameObject_NameOffset = 0x88;
+
             public const uint MonoBehaviour_ObjectClassOffset = 0x38;
             public const uint MonoBehaviour_GameObjectOffset = 0x48;
             public const uint MonoBehaviour_EnabledOffset = 0x38;
             public const uint MonoBehaviour_IsAddedOffset = 0x39;
-            public const uint Component_ObjectClassOffset = 0x38;
-            public const uint Component_GameObjectOffset = 0x50;          
-            public const uint TransformInternal_TransformAccessOffset = 0x90; // to TransformAccess
-            public const uint TransformAccess_IndexOffset = 0x70;
-            public const uint TransformAccess_HierarchyOffset = 0x68;
-            public const uint Hierarchy_VerticesOffset = 0x38;
-            public const uint Hierarchy_IndicesOffset = 0x40;
+
+            public const uint Component_ObjectClassOffset = 0x40;
+            public const uint Component_GameObjectOffset = 0x58;
+
+            public const uint TransformInternal_TransformAccessOffset = 0x90;
+            public const uint TransformAccess_IndexOffset = 0x90;
+            public const uint TransformAccess_HierarchyOffset = 0x88;
+
+            public const uint Hierarchy_VerticesOffset = 0x40;
+            public const uint Hierarchy_IndicesOffset = 0x68;
             public const uint Hierarchy_RootPositionOffset = 0x40;
-            public const uint Camera_ViewMatrixOffset = 0x120; // m_WorldToCameraMatrix Matrix4x4
-            public const uint Camera_FOVOffset = 0x1A0;
-            public const uint Camera_AspectRatioOffset = 0x510;
-            public const uint Camera_ZoomLevelOffset = 0xE0;
-            
-            // GfxDeviceClient
-            //public const uint GfxDeviceClient_ViewportOffset = 0x25A0; // m_Viewport RectT<int>
-            
-            // UnityInputManager
-            //public const uint UnityInputManager_CurrentKeyStateOffset = 0x60; // 0x50 + 0x8
-            
-            // Chains
+
+            public const uint Camera_ViewMatrixOffset = 0x128;
+            public const uint Camera_FOVOffset = 0x1A8;
+            public const uint Camera_AspectRatioOffset = 0x518;
+            public const uint Camera_ZoomLevelOffset = 0xE8;
+
             public static readonly uint[] GameWorldChain =
             [
                 GameObject_ComponentsOffset,
@@ -74,7 +72,7 @@ namespace LoneEftDmaRadar.Tarkov.Unity
                 GameObject_ComponentsOffset,
                 0x8,
                 Component_ObjectClassOffset,
-                0x10 // Transform Internal
+                0x10
             ];
         }
     }
